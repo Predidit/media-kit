@@ -5,6 +5,9 @@
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video_controls/media_kit_video_controls.dart';
@@ -366,97 +369,180 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
       contextNotifier: _contextNotifier,
       videoViewParametersNotifier: videoViewParametersNotifier,
       child: ValueListenableBuilder<VideoViewParameters>(
-        valueListenable: videoViewParametersNotifier,
-        builder: (context, videoViewParameters, _) {
-          return Container(
-            clipBehavior: Clip.none,
-            width: videoViewParameters.width,
-            height: videoViewParameters.height,
-            color: videoViewParameters.fill,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                ClipRect(
-                  child: FittedBox(
-                    fit: videoViewParameters.fit,
-                    alignment: videoViewParameters.alignment,
-                    child: ValueListenableBuilder<PlatformVideoController?>(
-                      valueListenable: widget.controller.notifier,
-                      builder: (context, notifier, _) => notifier == null
-                          ? const SizedBox.shrink()
-                          : ValueListenableBuilder<int?>(
-                              valueListenable: notifier.id,
-                              builder: (context, id, _) {
-                                return ValueListenableBuilder<Rect?>(
-                                  valueListenable: notifier.rect,
-                                  builder: (context, rect, _) {
-                                    if (id != null &&
-                                        rect != null &&
-                                        _visible) {
+          valueListenable: videoViewParametersNotifier,
+          builder: (context, videoViewParameters, _) {
+            return Container(
+              clipBehavior: Clip.none,
+              width: videoViewParameters.width,
+              height: videoViewParameters.height,
+              color: videoViewParameters.fill,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRect(
+                    child: FittedBox(
+                      fit: videoViewParameters.fit,
+                      alignment: videoViewParameters.alignment,
+                      child: ValueListenableBuilder<PlatformVideoController?>(
+                        valueListenable: widget.controller.notifier,
+                        builder: (context, notifier, _) {
+                          if (notifier == null) {
+                            debugPrint(
+                                '[VideoState.build] notifier (PlatformVideoController) is null. Returning SizedBox.shrink().');
+                            return const SizedBox.shrink();
+                          }
+                          return ValueListenableBuilder<int?>(
+                            valueListenable:
+                                notifier.id,
+                            builder: (context, id, _) {
+                              // For Android, 'id' is the player handle. For other platforms, it's the texture ID.
+                              if (id == null) {
+                                debugPrint(
+                                    '[VideoState.build] id (player handle/texture id) is null. Returning SizedBox.shrink().');
+                                return const SizedBox.shrink();
+                              }
+                              return ValueListenableBuilder<Rect?>(
+                                valueListenable: notifier.rect,
+                                builder: (context, currentRect, _) {
+                                  debugPrint(
+                                      '[VideoState.build] Rect builder: id: $id, currentRect: $currentRect, _visible: $_visible (note: _visible is for non-Android)');
+                                  if (currentRect == null) {
+                                    debugPrint(
+                                        '[VideoState.build] currentRect is null. Returning SizedBox.shrink().');
+                                    return const SizedBox.shrink();
+                                  }
+                                  if (Platform.isAndroid) {
+                                    // Android PlatformView
+                                    const String androidViewType =
+                                        'com.alexmercerind/media_kit_video_view';
+                                    return SizedBox(
+                                      width: videoViewParameters.aspectRatio ==
+                                              null
+                                          ? currentRect.width
+                                          : currentRect.height *
+                                              videoViewParameters.aspectRatio!,
+                                      height: currentRect.height,
+                                      child: Stack(
+                                        children: [
+                                          PlatformViewLink(
+                                            viewType: androidViewType,
+                                            surfaceFactory: (
+                                              BuildContext context,
+                                              PlatformViewController controller,
+                                            ) {
+                                              return PlatformViewSurface(
+                                                controller: controller,
+                                                hitTestBehavior:
+                                                    PlatformViewHitTestBehavior
+                                                        .transparent,
+                                                gestureRecognizers: const <Factory<
+                                                    OneSequenceGestureRecognizer>>{},
+                                              );
+                                            },
+                                            onCreatePlatformView: (
+                                              PlatformViewCreationParams params,
+                                            ) {
+                                              return PlatformViewsService
+                                                  .initExpensiveAndroidView(
+                                                id: params.id,
+                                                viewType: androidViewType,
+                                                layoutDirection:
+                                                    TextDirection.ltr,
+                                                creationParams: <String,
+                                                    dynamic>{
+                                                  'handle': id, // player handle
+                                                },
+                                                creationParamsCodec:
+                                                    const StandardMessageCodec(),
+                                                onFocus: () {
+                                                  params.onFocusChanged(true);
+                                                },
+                                              )
+                                                ..addOnPlatformViewCreatedListener(
+                                                    params
+                                                        .onPlatformViewCreated)
+                                                ..create();
+                                            },
+                                          ),
+                                          // Optional: Visual placeholder if the actual video area is still tiny (e.g., 1x1)
+                                          // This uses the calculated (pre-max) videoWidth/videoHeight.
+                                          if ((currentRect.width <= 1.0 ||
+                                                  currentRect.height <= 1.0) &&
+                                              !(currentRect.width == 0.0 &&
+                                                  currentRect.height == 0.0))
+                                            Positioned.fill(
+                                              child: Container(
+                                                  color:
+                                                      videoViewParameters.fill),
+                                            ),
+                                        ],
+                                      ),
+                                    );
+                                  } else {
+                                    // Non-Android platforms (Texture).
+                                    if (_visible) {
+                                      final FilterQuality filterQuality =
+                                          videoViewParameters.filterQuality;
                                       return SizedBox(
-                                        // Apply aspect ratio if provided.
                                         width:
                                             videoViewParameters.aspectRatio ==
                                                     null
-                                                ? rect.width
-                                                : rect.height *
+                                                ? currentRect.width
+                                                : currentRect.height *
                                                     videoViewParameters
                                                         .aspectRatio!,
-                                        height: rect.height,
+                                        height: currentRect.height,
                                         child: Stack(
                                           children: [
-                                            const SizedBox(),
                                             Positioned.fill(
                                               child: Texture(
                                                 textureId: id,
-                                                filterQuality:
-                                                    videoViewParameters
-                                                        .filterQuality,
+                                                filterQuality: filterQuality,
                                               ),
                                             ),
-                                            // Keep the |Texture| hidden before the first frame renders. In native implementation, if no default frame size is passed (through VideoController), a starting 1 pixel sized texture/surface is created to initialize the render context & check for H/W support.
-                                            // This is then resized based on the video dimensions & accordingly texture ID, texture, EGLDisplay, EGLSurface etc. (depending upon platform) are also changed. Just don't show that 1 pixel texture to the UI.
-                                            // NOTE: Unmounting |Texture| causes the |MarkTextureFrameAvailable| to not do anything on GNU/Linux.
-                                            if (rect.width <= 1.0 &&
-                                                rect.height <= 1.0)
+                                            if (currentRect.width <= 1.0 &&
+                                                currentRect.height <= 1.0)
                                               Positioned.fill(
                                                 child: Container(
-                                                  color:
-                                                      videoViewParameters.fill,
-                                                ),
+                                                    color: videoViewParameters
+                                                        .fill),
                                               ),
                                           ],
                                         ),
                                       );
                                     }
+                                    debugPrint(
+                                        '[VideoState.build] Non-Android: Conditions not met (currentRect null or not _visible). Shrinking.');
                                     return const SizedBox.shrink();
-                                  },
-                                );
-                              },
-                            ),
+                                  }
+                                },
+                              );
+                            },
+                          );
+                        },
+                      ),
                     ),
                   ),
-                ),
-                if (videoViewParameters.subtitleViewConfiguration.visible &&
-                    !(widget.controller.player.platform?.configuration.libass ??
-                        false))
-                  Positioned.fill(
-                    child: SubtitleView(
-                      controller: widget.controller,
-                      key: _subtitleViewKey,
-                      configuration:
-                          videoViewParameters.subtitleViewConfiguration,
+                  if (videoViewParameters.subtitleViewConfiguration.visible &&
+                      !(widget.controller.player.platform?.configuration
+                              .libass ??
+                          false))
+                    Positioned.fill(
+                      child: SubtitleView(
+                        controller: widget.controller,
+                        key: _subtitleViewKey,
+                        configuration:
+                            videoViewParameters.subtitleViewConfiguration,
+                      ),
                     ),
-                  ),
-                if (videoViewParameters.controls != null)
-                  Positioned.fill(
-                    child: videoViewParameters.controls!.call(this),
-                  ),
-              ],
-            ),
-          );
-        },
-      ),
+                  if (videoViewParameters.controls != null)
+                    Positioned.fill(
+                      child: videoViewParameters.controls!.call(this),
+                    ),
+                ],
+              ),
+            );
+          }),
     );
   }
 }

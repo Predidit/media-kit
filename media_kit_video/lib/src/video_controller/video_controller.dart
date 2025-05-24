@@ -62,8 +62,11 @@ class VideoController {
   /// Platform specific internal implementation initialized depending upon the current platform.
   final notifier = ValueNotifier<PlatformVideoController?>(null);
 
-  /// Texture ID of the video output, registered with Flutter engine by the native implementation.
+  /// Texture ID of the video output for Texture rendering (non-Android), or the player handle for Android PlatformView.
   final ValueNotifier<int?> id = ValueNotifier<int?>(null);
+
+  /// Native Surface ID (wid) for Android PlatformView. Null for other platforms.
+  final ValueNotifier<int?> wid = ValueNotifier<int?>(null);
 
   /// [Rect] of the video output, received from the native implementation.
   final ValueNotifier<Rect?> rect = ValueNotifier<Rect?>(null);
@@ -107,18 +110,31 @@ class VideoController {
 
         if (platform.isCompleted) {
           // Populate [id] & [rect] [ValueNotifier]s with the values from [platform] implementation of [PlatformVideoController].
-          final controller = await platform.future;
+          final platformController = await platform.future;
           // Add listeners.
-          void fn0() => id.value = controller.id.value;
-          void fn1() => rect.value = controller.rect.value;
-          fn0();
-          fn1();
-          controller.id.addListener(fn0);
-          controller.rect.addListener(fn1);
+          void idListener() => id.value = platformController.id.value;
+          void rectListener() => rect.value = platformController.rect.value;
+
+          idListener();
+          rectListener();
+
+          platformController.id.addListener(idListener);
+          platformController.rect.addListener(rectListener);
+
+          // For Android, also listen to the 'wid' (native surface ID).
+          if (platformController is AndroidVideoController) {
+            void widListener() => wid.value = (platformController as AndroidVideoController).wid.value;
+            widListener();
+            (platformController as AndroidVideoController).wid.addListener(widListener);
+            player.platform?.release.add(() async {
+              (platformController as AndroidVideoController).wid.removeListener(widListener);
+            });
+          }
+
           // Remove listeners upon [Player.dispose].
           player.platform?.release.add(() async {
-            controller.id.removeListener(fn0);
-            controller.rect.removeListener(fn1);
+            platformController.id.removeListener(idListener);
+            platformController.rect.removeListener(rectListener);
           });
         } else {
           platform.completeError(

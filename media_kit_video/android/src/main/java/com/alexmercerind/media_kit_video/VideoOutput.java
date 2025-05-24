@@ -1,144 +1,143 @@
-/**
- * This file is a part of media_kit (https://github.com/media-kit/media-kit).
- * <p>
- * Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
- * All rights reserved.
- * Use of this source code is governed by MIT license that can be found in the LICENSE file.
- */
 package com.alexmercerind.media_kit_video;
 
-import android.os.Handler;
-import android.os.Looper;
+import android.content.Context;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup; // Added for LayoutParams
+import android.widget.FrameLayout; // Added for FrameLayout.LayoutParams
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import io.flutter.plugin.platform.PlatformView;
+import java.util.Locale;
 import android.util.Log;
 
-import java.lang.reflect.Method;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Objects;
-
-import io.flutter.view.TextureRegistry;
-
-public class VideoOutput implements TextureRegistry.SurfaceProducer.Callback {
+public class VideoOutput implements PlatformView, SurfaceHolder.Callback {
     private static final String TAG = "VideoOutput";
-    private static final Method newGlobalObjectRef;
-    private static final Method deleteGlobalObjectRef;
-    private static final HashSet<Long> deletedGlobalObjectRefs = new HashSet<>();
-    private static final Handler handler = new Handler(Looper.getMainLooper());
 
-    static {
-        try {
-            // com.alexmercerind.mediakitandroidhelper.MediaKitAndroidHelper is part of package:media_kit_libs_android_video & package:media_kit_libs_android_audio packages.
-            // Use reflection to invoke methods of com.alexmercerind.mediakitandroidhelper.MediaKitAndroidHelper.
-            Class<?> mediaKitAndroidHelperClass = Class.forName("com.alexmercerind.mediakitandroidhelper.MediaKitAndroidHelper");
-            newGlobalObjectRef = mediaKitAndroidHelperClass.getDeclaredMethod("newGlobalObjectRef", Object.class);
-            deleteGlobalObjectRef = mediaKitAndroidHelperClass.getDeclaredMethod("deleteGlobalObjectRef", long.class);
-            newGlobalObjectRef.setAccessible(true);
-            deleteGlobalObjectRef.setAccessible(true);
-        } catch (Throwable e) {
-            Log.i("media_kit", "package:media_kit_libs_android_video missing. Make sure you have added it to pubspec.yaml.");
-            throw new RuntimeException("Failed to initialize com.alexmercerind.media_kit_video.VideoOutput.");
-        }
+    private final SurfaceView surfaceView;
+    private Surface surface;
+    private final long videoOutputManagerHandle;
+    private final VideoOutputManager videoOutputManager;
+    private final int id; // PlatformView ID
+
+    private int surfaceWidth = 0;
+    private int surfaceHeight = 0;
+    private boolean surfaceCreatedCalled = false;
+
+    public VideoOutput(Context context, int id, Object args, VideoOutputManager videoOutputManager, long videoOutputManagerHandle) {
+        this.id = id;
+        this.videoOutputManager = videoOutputManager;
+        this.videoOutputManagerHandle = videoOutputManagerHandle;
+
+        surfaceView = new SurfaceView(context);
+        surfaceView.getHolder().addCallback(this);
+
+        Log.i(TAG, String.format(Locale.ENGLISH, "Constructor: Created VideoOutput instance ID: %d for videoOutputManagerHandle: %d. SurfaceView: %s", this.id, this.videoOutputManagerHandle, (surfaceView != null ? surfaceView.toString() : "null")));
     }
 
-    private long id = 0;
-    private long wid = 0;
-
-    private final TextureUpdateCallback textureUpdateCallback;
-
-    private final TextureRegistry.SurfaceProducer surfaceProducer;
-
-    private final Object lock = new Object();
-
-    VideoOutput(TextureRegistry textureRegistryReference, TextureUpdateCallback textureUpdateCallback) {
-        this.textureUpdateCallback = textureUpdateCallback;
-
-        surfaceProducer = textureRegistryReference.createSurfaceProducer();
-        surfaceProducer.setCallback(this);
-
-        // By default, android.graphics.SurfaceTexture has a size of 1x1.
-        setSurfaceSize(1, 1, true);
+    @Nullable
+    @Override
+    public View getView() {
+        return surfaceView;
     }
 
+    @Override
     public void dispose() {
-        synchronized (lock) {
-            try {
-                surfaceProducer.getSurface().release();
-            } catch (Throwable e) {
-                Log.e(TAG, "dispose", e);
-            }
-            try {
-                surfaceProducer.release();
-            } catch (Throwable e) {
-                Log.e(TAG, "dispose", e);
-            }
-            onSurfaceCleanup();
+        Log.i(TAG, String.format(Locale.ENGLISH, "dispose: Disposing VideoOutput ID: %d for handle: %d", this.id, this.videoOutputManagerHandle));
+        if (surfaceView != null) {
+            surfaceView.getHolder().removeCallback(this);
         }
+        if (surface != null) {
+            surface.release();
+            surface = null;
+        }
+        // Notify VideoOutputManager that this specific PlatformView (id) is disposed.
+        // This is important if VideoOutputManager needs to tell the native media player to release the surface.
+        Log.i(TAG, String.format(Locale.ENGLISH, "dispose: Calling videoOutputManager.onPlatformViewDisposed for ID: %d, handle: %d", this.id, this.videoOutputManagerHandle));
+        videoOutputManager.onPlatformViewDisposed(videoOutputManagerHandle, id);
     }
 
-    public void setSurfaceSize(int width, int height) {
-        setSurfaceSize(width, height, false);
+    // SurfaceHolder.Callback methods
+
+    @Override
+    public void surfaceCreated(@NonNull SurfaceHolder holder) {
+        Log.i(TAG, String.format(Locale.ENGLISH, "surfaceCreated: Surface created for VideoOutput ID: %d (handle: %d). Surface: %s. Holder: %s", this.id, this.videoOutputManagerHandle, (this.surface != null ? this.surface.toString() : "null"), holder.toString()));
+        this.surface = holder.getSurface();
+        this.surfaceCreatedCalled = true;
+        // Attempt to notify if dimensions are already known (e.g. from a previous surfaceChanged or if holder has size)
+        // It's also possible surfaceChanged will be called immediately after this with actual dimensions.
+        // We primarily rely on surfaceChanged to provide definitive dimensions.
+        // If surfaceWidth and surfaceHeight are still 0, VideoOutputManager will wait.
+        Log.i(TAG, String.format(Locale.ENGLISH, "surfaceCreated: Calling videoOutputManager.trySignalSurfaceReady for ID: %d, handle: %d, width: %d, height: %d", this.id, this.videoOutputManagerHandle, this.surfaceWidth, this.surfaceHeight));
+        videoOutputManager.trySignalSurfaceReady(videoOutputManagerHandle, id, this.surface, this.surfaceWidth, this.surfaceHeight);
     }
 
-    private void setSurfaceSize(int width, int height, boolean force) {
-        synchronized (lock) {
-            try {
-                if (!force && surfaceProducer.getWidth() == width && surfaceProducer.getHeight() == height) {
-                    return;
-                }
-                surfaceProducer.setSize(width, height);
-                onSurfaceAvailable();
-            } catch (Throwable e) {
-                Log.e(TAG, "setSurfaceSize", e);
-            }
+    @Override
+    public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
+        Log.i(TAG, String.format(Locale.ENGLISH, "surfaceChanged: Surface changed for VideoOutput ID: %d (handle: %d). New Format: %d, Width: %d, Height: %d. Holder: %s", this.id, this.videoOutputManagerHandle, format, width, height, holder.toString()));
+        boolean dimensionsChanged = (this.surfaceWidth != width || this.surfaceHeight != height);
+        this.surfaceWidth = width;
+        this.surfaceHeight = height;
+        if (this.surfaceCreatedCalled && dimensionsChanged && width > 0 && height > 0) {
+            // If surface is already created and dimensions are now valid and have changed,
+            // or if this is the first time we get valid dimensions after creation.
+            Log.i(TAG, String.format(Locale.ENGLISH, "surfaceChanged: Conditions met (surfaceCreated, dimensionsChanged, valid size). Calling videoOutputManager.trySignalSurfaceReady for ID: %d, handle: %d, new width: %d, new height: %d", this.id, this.videoOutputManagerHandle, this.surfaceWidth, this.surfaceHeight));
+            videoOutputManager.trySignalSurfaceReady(videoOutputManagerHandle, id, this.surface, this.surfaceWidth, this.surfaceHeight);
+        } else {
+            Log.i(TAG, String.format(Locale.ENGLISH, "surfaceChanged: Conditions NOT met for calling trySignalSurfaceReady. surfaceCreatedCalled: %b, dimensionsChanged: %b, width: %d, height: %d", this.surfaceCreatedCalled, dimensionsChanged, width, height));
         }
     }
 
     @Override
-    public void onSurfaceAvailable() {
-        synchronized (lock) {
-            Log.i(TAG, "onSurfaceAvailable");
-            id = surfaceProducer.id();
-            wid = newGlobalObjectRef(surfaceProducer.getSurface());
-            textureUpdateCallback.onTextureUpdate(id, wid, surfaceProducer.getWidth(), surfaceProducer.getHeight());
+    public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+        Log.i(TAG, String.format(Locale.ENGLISH, "surfaceDestroyed: Surface destroyed for VideoOutput ID: %d (handle: %d). Holder: %s", this.id, this.videoOutputManagerHandle, holder.toString()));
+        this.surfaceCreatedCalled = false;
+        // Notify VideoOutputManager that surface is destroyed
+        if (this.surface != null) {
+            Log.i(TAG, String.format(Locale.ENGLISH, "surfaceDestroyed: Calling videoOutputManager.onSurfaceDestroyed for ID: %d, handle: %d", this.id, this.videoOutputManagerHandle));
+            videoOutputManager.onSurfaceDestroyed(videoOutputManagerHandle, id, this.surface);
+            this.surface.release(); // Release the surface
+            this.surface = null;
+            Log.i(TAG, String.format(Locale.ENGLISH, "surfaceDestroyed: Local surface reference nulled for ID: %d", this.id));
+        } else {
+            Log.w(TAG, String.format(Locale.ENGLISH, "surfaceDestroyed: Local surface reference was already null for ID: %d", this.id));
         }
     }
 
-    @Override
-    public void onSurfaceCleanup() {
-        synchronized (lock) {
-            Log.i(TAG, "onSurfaceCleanup");
-            textureUpdateCallback.onTextureUpdate(id, 0, surfaceProducer.getWidth(), surfaceProducer.getHeight());
-            if (wid != 0) {
-                final long widReference = wid;
-                handler.postDelayed(() -> deleteGlobalObjectRef(widReference), 5000);
+    // Method to get the surface, though direct passing in callbacks is better.
+    @Nullable
+    public Surface getSurface() {
+        return surface;
+    }
+
+    public void setFixedSurfaceSize(int width, int height) {
+        if (surfaceView != null && surfaceView.getHolder() != null && width > 0 && height > 0) {
+            Log.i(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. Holder.setFixedSize(%d, %d)", this.id, width, height));
+            surfaceView.getHolder().setFixedSize(width, height);
+
+            // New part: Update SurfaceView's LayoutParams
+            android.view.ViewGroup.LayoutParams params = surfaceView.getLayoutParams();
+            if (params != null) {
+                params.width = width;
+                params.height = height;
+                surfaceView.setLayoutParams(params);
+                Log.i(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. Updated SurfaceView LayoutParams to %d x %d.", this.id, width, height));
+                surfaceView.requestLayout();
+                Log.i(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. Called requestLayout() on SurfaceView.", this.id));
+            } else {
+                // This case should ideally not happen if SurfaceView is in a valid layout.
+                // If it does, creating default FrameLayout.LayoutParams.
+                Log.w(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. SurfaceView LayoutParams were null. Creating new FrameLayout.LayoutParams(%d, %d). This might indicate a layout issue higher up.", this.id, width, height));
+                android.widget.FrameLayout.LayoutParams newParams = new android.widget.FrameLayout.LayoutParams(width, height);
+                surfaceView.setLayoutParams(newParams);
+                surfaceView.requestLayout();
+                Log.i(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. Called requestLayout() on SurfaceView.", this.id));
             }
-        }
-    }
 
-    private static long newGlobalObjectRef(Object object) {
-        Log.i(TAG, String.format(Locale.ENGLISH, "newGlobalRef: object = %s", object));
-        try {
-            return (long) Objects.requireNonNull(newGlobalObjectRef.invoke(null, object));
-        } catch (Throwable e) {
-            Log.e(TAG, "newGlobalRef", e);
-            return 0;
-        }
-    }
-
-    private static void deleteGlobalObjectRef(long ref) {
-        if (deletedGlobalObjectRefs.contains(ref)) {
-            Log.i(TAG, String.format(Locale.ENGLISH, "deleteGlobalObjectRef: ref = %d ALREADY DELETED", ref));
-            return;
-        }
-        if (deletedGlobalObjectRefs.size() > 100) {
-            deletedGlobalObjectRefs.clear();
-        }
-        deletedGlobalObjectRefs.add(ref);
-        Log.i(TAG, String.format(Locale.ENGLISH, "deleteGlobalObjectRef: ref = %d", ref));
-        try {
-            deleteGlobalObjectRef.invoke(null, ref);
-        } catch (Throwable e) {
-            Log.e(TAG, "deleteGlobalObjectRef", e);
+        } else {
+            Log.w(TAG, String.format(Locale.ENGLISH, "setFixedSurfaceSize: VideoOutput ID: %d. Conditions not met for setting fixed size/layout params (width=%d, height=%d, holder/surfaceView null?).", this.id, width, height));
         }
     }
 }

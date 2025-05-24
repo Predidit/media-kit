@@ -46,28 +46,91 @@ class AndroidVideoController extends PlatformVideoController {
     }
   }
 
+  Future<void> _updateNativeSurfaceSize(int width, int height) async {
+    String sizeString = "${width}x${height}";
+    final handle = await player.handle; // For logging
+    debugPrint('[AndroidVideoController._updateNativeSurfaceSize] handle: $handle - Setting android-surface-size to: $sizeString');
+    try {
+      await setProperty('android-surface-size', sizeString);
+      debugPrint('[AndroidVideoController._updateNativeSurfaceSize] handle: $handle - Successfully set android-surface-size to: $sizeString');
+    } catch (e, s) {
+      debugPrint('[AndroidVideoController._updateNativeSurfaceSize] handle: $handle - ERROR setting android-surface-size: $e $s');
+    }
+  }
+
   /// Listener for updating the --wid property.
   Future<void> widListener() {
     return lock.synchronized(() async {
-      final width = rect.value?.width.toInt() ?? 1;
-      final height = rect.value?.height.toInt() ?? 1;
-      final androidSurfaceSizeValue = [width, height].join('x');
-      final widValue = wid.value?.toString() ?? '0';
-      // When --wid is 0, vo=null is required to avoid SIGSEGV.
-      final voValue = widValue == '0' ? 'null' : configuration.vo!;
-      final vidValue = widValue == '0' ? 'no' : 'auto';
-      // It is important to re-initialize --vo after --android-surface-size.
-      await setProperty('vo', 'null');
-      await setProperties(
-        {
+      String? logHandle; // For logging, especially in error cases
+      try {
+        // Attempt to get handle for logging
+        try {
+          logHandle = (await player.handle).toString();
+        } catch (_) {
+          logHandle = "unavailable_during_init_fetch";
+        }
+
+        debugPrint('[AndroidVideoController.widListener] ENTER for handle: $logHandle. Current wid.value: ${wid.value}');
+        final width = rect.value?.width.toInt() ?? 1;
+        final height = rect.value?.height.toInt() ?? 1;
+        final androidSurfaceSizeValue = [width, height].join('x');
+        final widValue = wid.value?.toString() ?? '0';
+        final voValue = widValue == '0' ? 'null' : configuration.vo!;
+        final vidValue = widValue == '0' ? 'no' : 'auto';
+        
+        debugPrint('[AndroidVideoController.widListener] handle: $logHandle - Calculated values: widValue: $widValue, voValue: $voValue, androidSurfaceSizeValue: $androidSurfaceSizeValue, vidValue: $vidValue (applicable if vo=mediacodec_embed)');
+
+        debugPrint('[AndroidVideoController.widListener] handle: $logHandle - About to setProperty vo: null');
+        await setProperty('vo', 'null');
+        debugPrint('[AndroidVideoController.widListener] handle: $logHandle - Done setProperty vo: null');
+
+        final propertiesToSet = {
           'android-surface-size': androidSurfaceSizeValue,
           'wid': widValue,
           'vo': voValue,
-          // It is important to re-initialize --vid in-case of --vo=mediacodec_embed.
-          // Not doing so causes error "Could not open codec." & video never gets rendered.
-          if (configuration.vo == 'mediacodec_embed') 'vid': vidValue,
-        },
-      );
+        };
+        if (configuration.vo == 'mediacodec_embed') {
+          propertiesToSet['vid'] = vidValue;
+        }
+        debugPrint('[AndroidVideoController.widListener] handle: $logHandle - About to setProperties: $propertiesToSet');
+        await setProperties(propertiesToSet);
+        debugPrint('[AndroidVideoController.widListener] handle: $logHandle - Done setProperties.');
+
+        // NEW: Call _updateNativeSurfaceSize with current rect dimensions
+        final currentRect = rect.value;
+        if (currentRect != null && currentRect.width > 0 && currentRect.height > 0) {
+          debugPrint('[AndroidVideoController.widListener] handle: $logHandle - Calling _updateNativeSurfaceSize with initial rect: ${currentRect.width.toInt()}x${currentRect.height.toInt()}');
+          await _updateNativeSurfaceSize(currentRect.width.toInt(), currentRect.height.toInt());
+        } else {
+          // If rect is null or invalid, we might still want to set a default (e.g., 1x1) or log this.
+          // The _updateNativeSurfaceSize method itself uses "widthxheight", so 0x0 would be passed if currentRect is 0x0.
+          // Let's ensure 1x1 if rect is null or invalid, as mpv might not like 0x0 for android-surface-size.
+          // However, _updateNativeSurfaceSize expects int, and rect dimensions are double.
+          // The existing androidSurfaceSizeValue calculation was:
+          // final widthForSizing = rect.value?.width.toInt() ?? 1;
+          // final heightForSizing = rect.value?.height.toInt() ?? 1;
+          // Let's use that pattern to ensure positive integers.
+          final int surfaceWidthForMpv = (currentRect?.width ?? 0.0).toInt();
+          final int surfaceHeightForMpv = (currentRect?.height ?? 0.0).toInt();
+          // Ensure at least 1x1 if dimensions are zero, as mpv might require positive values.
+          final int effectiveWidth = surfaceWidthForMpv > 0 ? surfaceWidthForMpv : 1;
+          final int effectiveHeight = surfaceHeightForMpv > 0 ? surfaceHeightForMpv : 1;
+
+          debugPrint('[AndroidVideoController.widListener] handle: $logHandle - Calling _updateNativeSurfaceSize with rect (defaulting to 1x1 if needed): ${effectiveWidth}x${effectiveHeight}');
+          await _updateNativeSurfaceSize(effectiveWidth, effectiveHeight);
+        }
+        // END NEW PART
+
+        debugPrint('[AndroidVideoController.widListener] EXIT for player handle: $logHandle');
+      } catch (e, s) {
+        // Attempt to get handle again for error logging, in case it became available or failed initially
+        try {
+          logHandle = (await player.handle).toString();
+        } catch (_) {
+          logHandle = logHandle ?? "unavailable_during_error_fetch"; // Keep previous if it was set
+        }
+        debugPrint('[AndroidVideoController.widListener] ERROR for handle $logHandle (wid ${wid.value}): $e $s');
+      }
     });
   }
 
@@ -106,6 +169,7 @@ class AndroidVideoController extends PlatformVideoController {
     platform.onUnloadHooks.add(onUnloadHook);
     videoParamsSubscription = player.stream.videoParams.listen(
       (event) => lock.synchronized(() async {
+        debugPrint('[AndroidVideoController.videoParamsSubscription] Received VideoParams: event.dw=${event.dw}, event.dh=${event.dh}, event.rotate=${event.rotate}, event.aspect=${event.aspect}, event.par=${event.par}');
         if ([0, null].contains(event.dw) || [0, null].contains(event.dh)) {
           return;
         }
@@ -122,7 +186,7 @@ class AndroidVideoController extends PlatformVideoController {
           width = event.dh ?? 0;
           height = event.dw ?? 0;
         }
-
+        debugPrint('[AndroidVideoController.videoParamsSubscription] Calculated for SetSurfaceSize: handle=$handle, targetWidth=$width, targetHeight=$height');
         await _channel.invokeMethod(
           'VideoOutputManager.SetSurfaceSize',
           {
@@ -151,6 +215,7 @@ class AndroidVideoController extends PlatformVideoController {
     Player player,
     VideoControllerConfiguration configuration,
   ) async {
+    debugPrint('[AndroidVideoController.create] ENTER');
     Future<String> getDefaultHwdec() async {
       // Enforce software rendering in emulators.
       bool hw = configuration.enableHardwareAcceleration;
@@ -171,8 +236,10 @@ class AndroidVideoController extends PlatformVideoController {
 
     // Retrieve the native handle of the [Player].
     final handle = await player.handle;
+    debugPrint('[AndroidVideoController.create] Player handle: $handle');
     // Return the existing [VideoController] if it's already created.
     if (_controllers.containsKey(handle)) {
+      debugPrint('[AndroidVideoController.create] Controller already exists for handle: $handle. Returning existing.');
       return _controllers[handle]!;
     }
 
@@ -194,6 +261,8 @@ class AndroidVideoController extends PlatformVideoController {
       player,
       configuration,
     );
+    controller.id.value = handle; // <-- ADD THIS LINE
+    debugPrint('[AndroidVideoController.create] Explicitly set controller.id.value to: ${controller.id.value}'); // <-- ADD THIS LINE
 
     // Register [_dispose] for execution upon [Player.dispose].
     player.platform?.release.add(controller._dispose);
@@ -201,33 +270,32 @@ class AndroidVideoController extends PlatformVideoController {
     // Store the [VideoController] in the [_controllers].
     _controllers[handle] = controller;
 
-    // Wait until first texture ID is received.
-    // We are not waiting on the native-side itself because it will block the UI thread.
-    final completer = Completer<void>();
-    void listener() {
-      final value = controller.id.value;
-      if (value != null) {
-        debugPrint('AndroidVideoController: Texture ID: $value');
-        completer.complete();
-      }
-    }
+    // The Completer logic previously here was removed as it was causing a hang.
+    // The creation of VideoOutputManager and its readiness is now handled asynchronously
+    // without blocking the create method. The native side will inform Dart when the
+    // surface (and thus WID) is ready via a method channel call, which is handled by
+    // the _channel.setMethodCallHandler.
 
-    controller.id.addListener(listener);
-
+    debugPrint('[AndroidVideoController.create] Calling VideoOutputManager.Create for handle: $handle');
     await _channel.invokeMethod(
       'VideoOutputManager.Create',
       {
         'handle': handle.toString(),
       },
     );
+    debugPrint('[AndroidVideoController.create] Called VideoOutputManager.Create for handle: $handle');
 
-    await completer.future;
-    controller.id.removeListener(listener);
+    // No longer waiting for completer.future here.
+    // The necessary WID will be updated via the method channel handler when the surface is ready.
+    // The controller.id (player handle) is already available.
 
+    debugPrint('[AndroidVideoController.create] About to set initial properties for handle: $handle');
     await controller.setProperties(
       {
-        // It is necessary to set vo=null here to avoid SIGSEGV, --wid must be assigned before vo=gpu is set.
-        'vo': 'null',
+        // 'vo': 'null', // REMOVED: 'vo' is now handled by widListener.
+                            // The comment "It is necessary to set vo=null here to avoid SIGSEGV, --wid must be assigned before vo=gpu is set."
+                            // is relevant for the operations *within* widListener or if wid was being set *here*.
+                            // But widListener has already run and taken care of the vo=null -> wid -> vo=gpu sequence.
         'hwdec': configuration.hwdec!,
         'vid': 'auto',
         'opengl-es': 'yes',
@@ -239,8 +307,10 @@ class AndroidVideoController extends PlatformVideoController {
         'hwdec-codecs': 'h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1',
       },
     );
+    debugPrint('[AndroidVideoController.create] Finished setting initial properties for handle: $handle');
 
     // Return the [PlatformVideoController].
+    debugPrint('[AndroidVideoController.create] EXIT for handle: $handle');
     return controller;
   }
 
@@ -287,48 +357,77 @@ class AndroidVideoController extends PlatformVideoController {
         ..setMethodCallHandler(
           (MethodCall call) async {
             try {
-              debugPrint(call.method.toString());
-              debugPrint(call.arguments.toString());
+              // General log for any incoming method call
+              // debugPrint('[AndroidVideoController.MethodHandler] Received method: ${call.method}, arguments: ${call.arguments}');
               switch (call.method) {
                 case 'VideoOutput.Resize':
                   {
+                    debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] Received: arguments: ${call.arguments}');
                     // Notify about updated texture ID & [Rect].
                     final int handle = call.arguments['handle'];
-                    final Rect rect = Rect.fromLTWH(
+                    final Rect parsedRect = Rect.fromLTWH(
                       call.arguments['rect']['left'] * 1.0,
                       call.arguments['rect']['top'] * 1.0,
                       call.arguments['rect']['width'] * 1.0,
                       call.arguments['rect']['height'] * 1.0,
                     );
-                    final int id = call.arguments['id'];
-                    final int wid = call.arguments['wid'];
-                    _controllers[handle]?.rect.value = rect;
-                    _controllers[handle]?.id.value = id;
+                    final int parsedId = call.arguments['id']; // This is playerHandle
+                    final int parsedWid = call.arguments['wid']; // This is native surface WID
+                    debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] Parsed: handle: $handle, id(playerHandle): $parsedId, wid(surfaceWID): $parsedWid, rect: $parsedRect');
+
+                    final controller = _controllers[handle];
+                    if (controller == null) {
+                      debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] No controller found for handle $handle');
+                      return;
+                    }
+
+                    final oldWid = controller.wid.value;
+
+                    controller.rect.value = parsedRect;
+                    controller.id.value = parsedId; // Store playerHandle in controller's id
                     // Only on Android:
-                    _controllers[handle]?.wid.value = wid;
+                    controller.wid.value = parsedWid; // Store WID in controller's wid
+                    debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] Updated controller for handle $handle: id.value=${controller.id.value}, wid.value=${controller.wid.value}, oldWid: $oldWid');
+                    
+                    if (parsedWid != 0 && parsedWid == oldWid && parsedRect.width > 0.0 && parsedRect.height > 0.0) {
+                      // WID is the same as before and is not zero, new dimensions are valid.
+                      // This means it's a size update for the existing surface.
+                      debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] handle: $handle - WID unchanged ($parsedWid), rect changed to: ${parsedRect.width}x${parsedRect.height}. Explicitly calling _updateNativeSurfaceSize.');
+                      await controller._updateNativeSurfaceSize(parsedRect.width.toInt(), parsedRect.height.toInt());
+                    } else if (parsedWid != oldWid) {
+                      // This case is implicitly handled because controller.wid.value changing will trigger widListener,
+                      // which already calls _updateNativeSurfaceSize.
+                      // Add a log for clarity.
+                      debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.Resize] handle: $handle - WID changed from $oldWid to $parsedWid. widListener will handle surface size update.');
+                    }
                     break;
                   }
                 case 'VideoOutput.WaitUntilFirstFrameRenderedNotify':
                   {
+                    debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.WaitUntilFirstFrameRenderedNotify] Received: arguments: ${call.arguments}');
                     // Notify about updated texture ID & [Rect].
                     final int handle = call.arguments['handle'];
-                    debugPrint(handle.toString());
+                    debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.WaitUntilFirstFrameRenderedNotify] Parsed handle: $handle');
                     // Notify about the first frame being rendered.
                     final completer = _controllers[handle]
                         ?.waitUntilFirstFrameRenderedCompleter;
                     if (!(completer?.isCompleted ?? true)) {
                       completer?.complete();
+                      debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.WaitUntilFirstFrameRenderedNotify] Completed completer for handle $handle');
+                    } else {
+                      debugPrint('[AndroidVideoController.MethodHandler.VideoOutput.WaitUntilFirstFrameRenderedNotify] Completer already completed or null for handle $handle');
                     }
                     break;
                   }
                 default:
                   {
+                    debugPrint('[AndroidVideoController.MethodHandler] Received unhandled method: ${call.method}');
                     break;
                   }
               }
             } catch (exception, stacktrace) {
-              debugPrint(exception.toString());
-              debugPrint(stacktrace.toString());
+              // Log error with method name if possible
+              debugPrint('[AndroidVideoController.MethodHandler] ERROR during method ${call.method}: $exception StackTrace: $stacktrace');
             }
           },
         );
