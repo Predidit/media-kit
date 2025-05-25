@@ -58,10 +58,10 @@ task downloadDependencies(type: Exec) {
 
         // Download all *.jar dependencies & verify their MD5 checksums.
         def filesToDownload = [
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.4/default-arm64-v8a.jar", "md5": "512070675a9ff19a9fd964dd433e5ab5", "destination": file("$buildDir/v1.1.4/default-arm64-v8a.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.4/default-armeabi-v7a.jar", "md5": "9eee5d06c5517807eee050c1fc40917b", "destination": file("$buildDir/v1.1.4/default-armeabi-v7a.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.4/default-x86_64.jar", "md5": "f1ac2561b0c0a9867ad8c55f60321432", "destination": file("$buildDir/v1.1.4/default-x86_64.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.4/default-x86.jar", "md5": "8c9f8e4e7647508a28986451b205ab68", "destination": file("$buildDir/v1.1.4/default-x86.jar")]
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.0.2/default-arm64-v8a.jar", "md5": "a114a4e352cfb2d5ead6fba4f5963e51", "destination": file("$buildDir/v1.0.2/default-arm64-v8a.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.0.2/default-armeabi-v7a.jar", "md5": "108b577e0c1c5e05f88a1fb8defe91f2", "destination": file("$buildDir/v1.0.2/default-armeabi-v7a.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.0.2/default-x86_64.jar", "md5": "565b9501de27d2fa652a5a5824d70f22", "destination": file("$buildDir/v1.0.2/default-x86_64.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.0.2/default-x86.jar", "md5": "4e147d08599e56a2f29531698addfc29", "destination": file("$buildDir/v1.0.2/default-x86.jar")]
         ]
 
         filesToDownload.each { fileInfo ->
