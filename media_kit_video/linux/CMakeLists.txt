@@ -8,7 +8,10 @@
 # Copyright © 2024 & Predidit
 # All rights reserved.
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.13)
+
+# Option to use system libmpv instead of bundled version
+option(USE_SYSTEM_LIBMPV "Use system-installed libmpv instead of bundled version" OFF)
 
 set(PROJECT_NAME "media_kit_video")
 set(CMAKE_CXX_STANDARD 17)
@@ -30,94 +33,97 @@ endif()
 
 message(STATUS "Detected architecture: ${ARCH_NAME}")
 
-if(ARCH_NAME STREQUAL "x86_64")
-  set(LIBMPV_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_x86_64.zip")
-  set(LIBMPV_ZIP_SHA256 "354177cc535070db0293b7fc2701c814a1e4cd2c384d211f3017528179cbae85")
-  set(LIBMPV_HEADER_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_x86_64_header.zip")
-  set(LIBMPV_HEADER_ZIP_SHA256 "7035c0c63306cce963a7b7ba9c51a9c6cec52554ece538fac3902c8586a03d9f")
-elseif(ARCH_NAME STREQUAL "aarch64")
-  set(LIBMPV_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_aarch64.zip")
-  set(LIBMPV_ZIP_SHA256 "662743af25d366b9abea470dce4c2f92d0309ee84d71fbca8cb2be87c5da0715")
-  set(LIBMPV_HEADER_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_aarch64_header.zip")
-  set(LIBMPV_HEADER_ZIP_SHA256 "213742ad736e2ba0655e54609529f2410d6c5ca8da057b973cc433f34773418f")
-endif()
+if(NOT USE_SYSTEM_LIBMPV)
+  # Only download and setup bundled libmpv if not using system libmpv
+  if(ARCH_NAME STREQUAL "x86_64")
+    set(LIBMPV_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_x86_64.zip")
+    set(LIBMPV_ZIP_SHA256 "354177cc535070db0293b7fc2701c814a1e4cd2c384d211f3017528179cbae85")
+    set(LIBMPV_HEADER_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_x86_64_header.zip")
+    set(LIBMPV_HEADER_ZIP_SHA256 "7035c0c63306cce963a7b7ba9c51a9c6cec52554ece538fac3902c8586a03d9f")
+  elseif(ARCH_NAME STREQUAL "aarch64")
+    set(LIBMPV_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_aarch64.zip")
+    set(LIBMPV_ZIP_SHA256 "662743af25d366b9abea470dce4c2f92d0309ee84d71fbca8cb2be87c5da0715")
+    set(LIBMPV_HEADER_ZIP_URL "https://github.com/Predidit/libmpv-linux-build/releases/download/20251022/libmpv_aarch64_header.zip")
+    set(LIBMPV_HEADER_ZIP_SHA256 "213742ad736e2ba0655e54609529f2410d6c5ca8da057b973cc433f34773418f")
+  endif()
 
-set(LIBMPV_ZIP_PATH "${CMAKE_BINARY_DIR}/libmpv_${ARCH_NAME}.zip")
-set(LIBMPV_UNZIP_DIR "${CMAKE_BINARY_DIR}/mpv")
+  set(LIBMPV_ZIP_PATH "${CMAKE_BINARY_DIR}/libmpv_${ARCH_NAME}.zip")
+  set(LIBMPV_UNZIP_DIR "${CMAKE_BINARY_DIR}/mpv")
 
-make_directory("${LIBMPV_UNZIP_DIR}") 
-message(STATUS "create libmpv unzip directory ${LIBMPV_UNZIP_DIR}")
+  make_directory("${LIBMPV_UNZIP_DIR}") 
+  message(STATUS "create libmpv unzip directory ${LIBMPV_UNZIP_DIR}")
 
-message(STATUS "downloading libmpv from ${LIBMPV_ZIP_URL} to ${LIBMPV_ZIP_PATH}")
-file(DOWNLOAD ${LIBMPV_ZIP_URL} ${LIBMPV_ZIP_PATH} SHOW_PROGRESS STATUS download_status)
+  message(STATUS "downloading libmpv from ${LIBMPV_ZIP_URL} to ${LIBMPV_ZIP_PATH}")
+  file(DOWNLOAD ${LIBMPV_ZIP_URL} ${LIBMPV_ZIP_PATH} SHOW_PROGRESS STATUS download_status)
 
-list(GET download_status 0 download_status_code)
-if(NOT download_status_code EQUAL 0)
-  message(FATAL_ERROR "libmpv download failed. err: ${download_status_code}")
-else()
-  message(STATUS "libmpv download completed.")
-endif()
+  list(GET download_status 0 download_status_code)
+  if(NOT download_status_code EQUAL 0)
+    message(FATAL_ERROR "libmpv download failed. err: ${download_status_code}")
+  else()
+    message(STATUS "libmpv download completed.")
+  endif()
 
-message(STATUS "Verifying SHA256 checksum for ${LIBMPV_ZIP_PATH}")
-file(SHA256 ${LIBMPV_ZIP_PATH} computed_sha256)
-if(NOT computed_sha256 STREQUAL "${LIBMPV_ZIP_SHA256}")
-  message(FATAL_ERROR "SHA256 checksum mismatch! Expected: ${LIBMPV_ZIP_SHA256}, Got: ${computed_sha256}")
-else()
-  message(STATUS "SHA256 checksum verification passed.")
-endif()
+  message(STATUS "Verifying SHA256 checksum for ${LIBMPV_ZIP_PATH}")
+  file(SHA256 ${LIBMPV_ZIP_PATH} computed_sha256)
+  if(NOT computed_sha256 STREQUAL "${LIBMPV_ZIP_SHA256}")
+    message(FATAL_ERROR "SHA256 checksum mismatch! Expected: ${LIBMPV_ZIP_SHA256}, Got: ${computed_sha256}")
+  else()
+    message(STATUS "SHA256 checksum verification passed.")
+  endif()
 
-message(STATUS "unzip libmpv to ${LIBMPV_UNZIP_DIR}")
-execute_process(
-  COMMAND unzip -o -q ${LIBMPV_ZIP_PATH} -d ${LIBMPV_UNZIP_DIR}
-  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-  RESULT_VARIABLE unzip_result
-)
+  message(STATUS "unzip libmpv to ${LIBMPV_UNZIP_DIR}")
+  execute_process(
+    COMMAND unzip -o -q ${LIBMPV_ZIP_PATH} -d ${LIBMPV_UNZIP_DIR}
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    RESULT_VARIABLE unzip_result
+  )
 
-if(NOT unzip_result EQUAL 0)
-  message(FATAL_ERROR "unzip libmpv failed, err: ${unzip_result}")
-else()
-  message(STATUS "unzip libmpv success.")
-endif()
+  if(NOT unzip_result EQUAL 0)
+    message(FATAL_ERROR "unzip libmpv failed, err: ${unzip_result}")
+  else()
+    message(STATUS "unzip libmpv success.")
+  endif()
 
-set(LIBMPV_PATH "${LIBMPV_UNZIP_DIR}")
+  set(LIBMPV_PATH "${LIBMPV_UNZIP_DIR}")
 
-if(EXISTS "${LIBMPV_PATH}/libmpv.so.2")
-  message(STATUS "libmpv.so.2 founded ${LIBMPV_PATH}/libmpv.so.2")
-else()
-  message(FATAL_ERROR "libmpv.so.2 not founded ${LIBMPV_PATH}")
-endif()
+  if(EXISTS "${LIBMPV_PATH}/libmpv.so.2")
+    message(STATUS "libmpv.so.2 founded ${LIBMPV_PATH}/libmpv.so.2")
+  else()
+    message(FATAL_ERROR "libmpv.so.2 not founded ${LIBMPV_PATH}")
+  endif()
 
-set(LIBMPV_HEADER_ZIP_PATH "${CMAKE_BINARY_DIR}/libmpv_${ARCH_NAME}_header.zip")
-set(LIBMPV_HEADER_UNZIP_DIR "${CMAKE_BINARY_DIR}/mpv/include")
+  set(LIBMPV_HEADER_ZIP_PATH "${CMAKE_BINARY_DIR}/libmpv_${ARCH_NAME}_header.zip")
+  set(LIBMPV_HEADER_UNZIP_DIR "${CMAKE_BINARY_DIR}/mpv/include")
 
-message(STATUS "downloading libmpv header from ${LIBMPV_HEADER_ZIP_URL} to ${LIBMPV_HEADER_ZIP_PATH}")
-file(DOWNLOAD ${LIBMPV_HEADER_ZIP_URL} ${LIBMPV_HEADER_ZIP_PATH} SHOW_PROGRESS STATUS download_status)
+  message(STATUS "downloading libmpv header from ${LIBMPV_HEADER_ZIP_URL} to ${LIBMPV_HEADER_ZIP_PATH}")
+  file(DOWNLOAD ${LIBMPV_HEADER_ZIP_URL} ${LIBMPV_HEADER_ZIP_PATH} SHOW_PROGRESS STATUS download_status)
 
-list(GET download_status 0 download_status_code)
-if(NOT download_status_code EQUAL 0)
-  message(FATAL_ERROR "libmpv header download failed. err: ${download_status_code}")
-else()
-  message(STATUS "libmpv header download completed.")
-endif()
+  list(GET download_status 0 download_status_code)
+  if(NOT download_status_code EQUAL 0)
+    message(FATAL_ERROR "libmpv header download failed. err: ${download_status_code}")
+  else()
+    message(STATUS "libmpv header download completed.")
+  endif()
 
-message(STATUS "Verifying SHA256 checksum for ${LIBMPV_HEADER_ZIP_PATH}")
-file(SHA256 ${LIBMPV_HEADER_ZIP_PATH} computed_header_sha256)
-if(NOT computed_header_sha256 STREQUAL "${LIBMPV_HEADER_ZIP_SHA256}")
-  message(FATAL_ERROR "SHA256 checksum mismatch! Expected: ${LIBMPV_HEADER_ZIP_SHA256}, Got: ${computed_header_sha256}")
-else()
-  message(STATUS "SHA256 checksum verification passed.")
-endif()
+  message(STATUS "Verifying SHA256 checksum for ${LIBMPV_HEADER_ZIP_PATH}")
+  file(SHA256 ${LIBMPV_HEADER_ZIP_PATH} computed_header_sha256)
+  if(NOT computed_header_sha256 STREQUAL "${LIBMPV_HEADER_ZIP_SHA256}")
+    message(FATAL_ERROR "SHA256 checksum mismatch! Expected: ${LIBMPV_HEADER_ZIP_SHA256}, Got: ${computed_header_sha256}")
+  else()
+    message(STATUS "SHA256 checksum verification passed.")
+  endif()
 
-message(STATUS "unzip libmpv header to ${LIBMPV_HEADER_UNZIP_DIR}")
-execute_process(
-  COMMAND unzip -o -q ${LIBMPV_HEADER_ZIP_PATH} -d ${LIBMPV_HEADER_UNZIP_DIR}
-  RESULT_VARIABLE unzip_result
-)
+  message(STATUS "unzip libmpv header to ${LIBMPV_HEADER_UNZIP_DIR}")
+  execute_process(
+    COMMAND unzip -o -q ${LIBMPV_HEADER_ZIP_PATH} -d ${LIBMPV_HEADER_UNZIP_DIR}
+    RESULT_VARIABLE unzip_result
+  )
 
-if(NOT unzip_result EQUAL 0)
-  message(FATAL_ERROR "unzip libmpv header failed, err: ${unzip_result}")
-else()
-  message(STATUS "unzip libmpv header success.")
+  if(NOT unzip_result EQUAL 0)
+    message(FATAL_ERROR "unzip libmpv header failed, err: ${unzip_result}")
+  else()
+    message(STATUS "unzip libmpv header success.")
+  endif()
 endif()
 
 if(MEDIA_KIT_LIBS_AVAILABLE)
@@ -131,30 +137,15 @@ if(MEDIA_KIT_LIBS_AVAILABLE)
     "utils.cc"
   )
 
-  # add runpath, shared libs of a release bundle is in lib dir, plugin must add $ORIGIN to runpath to find libmpv
-  target_link_options(${PLUGIN_NAME} PRIVATE -Wl,--enable-new-dtags -Wl,-z,origin)
-  set_target_properties(${PLUGIN_NAME} PROPERTIES 
-  BUILD_WITH_INSTALL_RPATH TRUE
-  INSTALL_RPATH "$ORIGIN:$ORIGIN/lib"
-  INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-  add_library(
-     libmpv SHARED IMPORTED
-  )
-
   apply_standard_settings(${PLUGIN_NAME})
 
+  # Check for libmpv & epoxy headers & libraries.
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(epoxy IMPORTED_TARGET epoxy)
 
   set_target_properties(
     ${PLUGIN_NAME} PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-  )
-
-  set_target_properties(
-    libmpv PROPERTIES
-    IMPORTED_LOCATION "${LIBMPV_UNZIP_DIR}/libmpv.so.2"
   )
 
   target_compile_definitions(
@@ -170,18 +161,50 @@ if(MEDIA_KIT_LIBS_AVAILABLE)
     "${epoxy_INCLUDE_DIRS}"
   )
 
-  target_include_directories(
-    ${PLUGIN_NAME} PRIVATE
-    "${LIBMPV_HEADER_UNZIP_DIR}"
-  )
+  if(NOT USE_SYSTEM_LIBMPV)
+    # Use bundled libmpv
+    # add runpath, shared libs of a release bundle is in lib dir, plugin must add $ORIGIN to runpath to find libmpv
+    target_link_options(${PLUGIN_NAME} PRIVATE -Wl,--enable-new-dtags -Wl,-z,origin)
+    set_target_properties(${PLUGIN_NAME} PROPERTIES 
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN:$ORIGIN/lib"
+    INSTALL_RPATH_USE_LINK_PATH TRUE)
 
-  target_link_libraries(
-    ${PLUGIN_NAME} PRIVATE
-    flutter
-    PkgConfig::GTK
-    libmpv
-    PkgConfig::epoxy
-  )
+    add_library(
+       libmpv SHARED IMPORTED
+    )
+
+    set_target_properties(
+      libmpv PROPERTIES
+      IMPORTED_LOCATION "${LIBMPV_UNZIP_DIR}/libmpv.so.2"
+    )
+
+    target_include_directories(
+      ${PLUGIN_NAME} PRIVATE
+      "${LIBMPV_HEADER_UNZIP_DIR}"
+    )
+
+    target_link_libraries(
+      ${PLUGIN_NAME} PRIVATE
+      flutter
+      PkgConfig::GTK
+      libmpv
+      PkgConfig::epoxy
+    )
+  else()
+    # Use system-installed libmpv
+    pkg_check_modules(mpv IMPORTED_TARGET mpv)
+    
+    target_compile_options(${PLUGIN_NAME} PRIVATE "${mpv_CFLAGS_OTHER}")
+    target_include_directories(${PLUGIN_NAME} INTERFACE "${mpv_INCLUDE_DIRS}")
+    target_link_libraries(
+      ${PLUGIN_NAME} PRIVATE
+      flutter
+      PkgConfig::GTK
+      PkgConfig::mpv
+      PkgConfig::epoxy
+    )
+  endif()
 
 else()
   message(NOTICE "media_kit: WARNING: package:media_kit_libs_*** not found.")
@@ -223,13 +246,21 @@ else()
   )
 endif()
 
-message(STATUS "create libmpv install directory ${CMAKE_BINARY_DIR}/mpv")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/mpv")
+if(NOT USE_SYSTEM_LIBMPV)
+  message(STATUS "create libmpv install directory ${CMAKE_BINARY_DIR}/mpv")
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/mpv")
 
-# install(FILES "${LIBMPV_PATH}/libmpv.so.2" DESTINATION lib)
+  # install(FILES "${LIBMPV_PATH}/libmpv.so.2" DESTINATION lib)
 
-set(
-  media_kit_video_bundled_libraries
-  "${LIBMPV_PATH}/libmpv.so.2"
-  PARENT_SCOPE
-)
+  set(
+    media_kit_video_bundled_libraries
+    "${LIBMPV_PATH}/libmpv.so.2"
+    PARENT_SCOPE
+  )
+else()
+  set(
+    media_kit_video_bundled_libraries
+    ""
+    PARENT_SCOPE
+  )
+endif()
