@@ -236,18 +236,8 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                       if (self->destroyed) {
                         return;
                       }
-                      // Use idle callback to mark texture update on main thread
-                      // This prevents race conditions during heavy animations
-                      gdk_threads_add_idle(
-                          [](gpointer data) -> gboolean {
-                            VideoOutput* self = (VideoOutput*)data;
-                            if (!self->destroyed && self->texture_registrar && self->texture_gl) {
-                              fl_texture_registrar_mark_texture_frame_available(
-                                  self->texture_registrar, FL_TEXTURE(self->texture_gl));
-                            }
-                            return FALSE;
-                          },
-                          data);
+                      fl_texture_registrar_mark_texture_frame_available(
+                          self->texture_registrar, FL_TEXTURE(self->texture_gl));
                     },
                     self);
                 hardware_acceleration_supported = TRUE;

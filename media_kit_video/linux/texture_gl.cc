@@ -18,7 +18,6 @@ struct _TextureGL {
   guint32 current_width;
   guint32 current_height;
   VideoOutput* video_output;
-  EGLSync render_sync; /* EGL sync object for frame synchronization */
 };
 
 G_DEFINE_TYPE(TextureGL, texture_gl, fl_texture_gl_get_type())
@@ -29,7 +28,6 @@ static void texture_gl_init(TextureGL* self) {
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
-  self->render_sync = EGL_NO_SYNC_KHR;
 }
 
 static void texture_gl_dispose(GObject* object) {
@@ -49,12 +47,6 @@ static void texture_gl_dispose(GObject* object) {
       
       // Try to make our context current for cleanup
       if (eglMakeCurrent(egl_display, mpv_surface, mpv_surface, mpv_context) == EGL_TRUE) {
-        // Clean up sync object
-        if (self->render_sync != EGL_NO_SYNC_KHR) {
-          eglDestroySyncKHR(egl_display, self->render_sync);
-          self->render_sync = EGL_NO_SYNC_KHR;
-        }
-        
         if (self->name != 0) {
           glDeleteTextures(1, &self->name);
           self->name = 0;
@@ -71,19 +63,16 @@ static void texture_gl_dispose(GObject* object) {
       } else {
         // If we can't make context current, just reset the handles
         g_warning("media_kit: Failed to make EGL context current during texture cleanup");
-        self->render_sync = EGL_NO_SYNC_KHR;
         self->name = 0;
         self->fbo = 0;
       }
     } else {
       // EGL context is invalid, just reset the handles
-      self->render_sync = EGL_NO_SYNC_KHR;
       self->name = 0;
       self->fbo = 0;
     }
   } else {
     // VideoOutput is destroyed or invalid, just reset the handles
-    self->render_sync = EGL_NO_SYNC_KHR;
     self->name = 0;
     self->fbo = 0;
   }
@@ -147,26 +136,19 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   EGLSurface mpv_surface = video_output_get_egl_surface(video_output);
   
   gboolean context_switched = FALSE;
-  gboolean should_switch_context = (flutter_context != mpv_context);
-  
   if (mpv_context != EGL_NO_CONTEXT && egl_display != EGL_NO_DISPLAY && mpv_surface != EGL_NO_SURFACE) {
-    if (should_switch_context) {
-      if (eglMakeCurrent(egl_display, mpv_surface, mpv_surface, mpv_context) == EGL_TRUE) {
-        context_switched = TRUE;
-      } else {
-        // eglMakeCurrent failed, log error and skip rendering
-        EGLint egl_error = eglGetError();
-        g_warning("media_kit: eglMakeCurrent failed with error 0x%x", egl_error);
-        video_output_unlock(video_output);
-        *target = GL_TEXTURE_2D;
-        *name = self->name ? self->name : 0;
-        *width = self->current_width;
-        *height = self->current_height;
-        return TRUE;
-      }
+    if (eglMakeCurrent(egl_display, mpv_surface, mpv_surface, mpv_context) == EGL_TRUE) {
+      context_switched = TRUE;
     } else {
-      // Already in the correct context
-      context_switched = FALSE;
+      // eglMakeCurrent failed, log error and skip rendering
+      EGLint egl_error = eglGetError();
+      g_warning("media_kit: eglMakeCurrent failed with error 0x%x", egl_error);
+      video_output_unlock(video_output);
+      *target = GL_TEXTURE_2D;
+      *name = self->name ? self->name : 0;
+      *width = self->current_width;
+      *height = self->current_height;
+      return TRUE;
     }
   }
   
@@ -210,18 +192,6 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     
     // Check if render_context is still valid
     if (render_context != NULL) {
-      // Wait for previous frame sync before rendering new frame
-      if (self->render_sync != EGL_NO_SYNC_KHR) {
-        EGLint wait_result = eglClientWaitSyncKHR(egl_display, self->render_sync, 
-                                                   EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 
-                                                   16666666); // ~16ms timeout (60fps)
-        if (wait_result == EGL_FALSE || wait_result == EGL_TIMEOUT_EXPIRED_KHR) {
-          g_warning("media_kit: Previous frame sync timeout or failed");
-        }
-        eglDestroySyncKHR(egl_display, self->render_sync);
-        self->render_sync = EGL_NO_SYNC_KHR;
-      }
-      
       // Render the frame
       mpv_opengl_fbo fbo{(gint32)self->fbo, required_width, required_height, 0};
       int flip_y = 0;
@@ -232,15 +202,9 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
       };
       mpv_render_context_render(render_context, params);
       
-      // Create sync object to ensure rendering completes before Flutter uses the texture
-      // This prevents flickering when Flutter's compositor reads from the texture
-      // while mpv is still rendering to it
+      // Ensure all rendering commands complete before switching context
       glFlush();
-      self->render_sync = eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
-      if (self->render_sync == EGL_NO_SYNC_KHR) {
-        // Fallback to glFinish if sync creation fails
-        glFinish();
-      }
+      glFinish();
     }
     
     // Unbind FBO
