@@ -108,4 +108,10 @@ gint64 video_output_get_texture_id(VideoOutput* self);
 
 void video_output_notify_texture_update(VideoOutput* self);
 
+void video_output_lock(VideoOutput* self);
+
+void video_output_unlock(VideoOutput* self);
+
+gboolean video_output_is_destroyed(VideoOutput* self);
+
 #endif  // VIDEO_OUTPUT_H_
