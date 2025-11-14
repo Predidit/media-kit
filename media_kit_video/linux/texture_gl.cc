@@ -9,6 +9,7 @@
 #include "include/media_kit_video/texture_gl.h"
 
 #include <epoxy/gl.h>
+#include <epoxy/egl.h>
 
 struct _TextureGL {
   FlTextureGL parent_instance;
@@ -31,32 +32,23 @@ static void texture_gl_init(TextureGL* self) {
 
 static void texture_gl_dispose(GObject* object) {
   TextureGL* self = TEXTURE_GL(object);
-  // Only delete OpenGL resources if there is a valid OpenGL context.
-  gboolean deleted = FALSE;
-  if (self->video_output != NULL) {
-    GdkGLContext* ctx = video_output_get_gdk_gl_context(self->video_output);
-    if (ctx != NULL) {
-      gdk_gl_context_make_current(ctx);
-      if (gdk_gl_context_get_current() == ctx) {
-        if (self->name != 0) {
-          glDeleteTextures(1, &self->name);
-          self->name = 0;
-        }
-        if (self->fbo != 0) {
-          glDeleteFramebuffers(1, &self->fbo);
-          self->fbo = 0;
-        }
-        deleted = TRUE;
-      }
-    }
-  }
-  if (!deleted) {
+  g_print("media_kit: TextureGL: dispose called.\n");
+  // Clean up OpenGL resources
+  // Flutter manages the GL context, so resources should be valid when dispose is called
+  if (self->name != 0) {
+    g_print("media_kit: TextureGL: Deleting texture %u.\n", self->name);
+    glDeleteTextures(1, &self->name);
     self->name = 0;
+  }
+  if (self->fbo != 0) {
+    g_print("media_kit: TextureGL: Deleting FBO %u.\n", self->fbo);
+    glDeleteFramebuffers(1, &self->fbo);
     self->fbo = 0;
   }
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
+  g_print("media_kit: TextureGL: dispose completed.\n");
   G_OBJECT_CLASS(texture_gl_parent_class)->dispose(object);
 }
 
@@ -80,25 +72,14 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   TextureGL* self = TEXTURE_GL(texture);
   VideoOutput* video_output = self->video_output;
   
-  // Save the current GL context state of Flutter
-  GdkGLContext* ctx = video_output_get_gdk_gl_context(video_output);
-  GdkGLContext* current_ctx = gdk_gl_context_get_current();
-  
-  // Only switch if our context is not the current context
-  gboolean need_context_switch = (ctx != NULL && current_ctx != ctx);
-  if (need_context_switch) {
-    gdk_gl_context_make_current(ctx);
-  }
-  
   gint32 required_width = (guint32)video_output_get_width(video_output);
   gint32 required_height = (guint32)video_output_get_height(video_output);
+  
   if (required_width > 0 && required_height > 0) {
     gboolean first_frame = self->name == 0 || self->fbo == 0;
     gboolean resize = self->current_width != required_width ||
                       self->current_height != required_height;
     if (first_frame || resize) {
-      g_print("media_kit: TextureGL: Resize: (%d, %d)\n", required_width,
-              required_height);
       // Free previous texture & FBO.
       if (!first_frame) {
         glDeleteTextures(1, &self->name);
@@ -116,53 +97,62 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
       // Attach the texture to the FBO.
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                              GL_TEXTURE_2D, self->name, 0);
-      glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
       self->current_width = required_width;
       self->current_height = required_height;
+      // Unbind FBO immediately after creation
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
       // Notify Flutter about the change in texture's dimensions.
       video_output_notify_texture_update(video_output);
-    } else {
-      glBindTexture(GL_TEXTURE_2D, self->name);
-      glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
     }
+    
+    // Switch to mpv's EGL context for rendering
+    EGLDisplay egl_display = video_output_get_egl_display(video_output);
+    EGLContext egl_context = video_output_get_egl_context(video_output);
+    EGLSurface egl_surface = video_output_get_egl_surface(video_output);
+    
+    if (egl_context != EGL_NO_CONTEXT) {
+      eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
+    }
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
+    
     mpv_render_context* render_context =
         video_output_get_render_context(video_output);
-    // Render the frame.
+    
+    // Render the frame
     mpv_opengl_fbo fbo{(gint32)self->fbo, required_width, required_height, 0};
+    int flip_y = 0;
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
         {MPV_RENDER_PARAM_INVALID, NULL},
     };
     mpv_render_context_render(render_context, params);
+    
+    // Unbind FBO before switching context
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    
+    // Restore Flutter's EGL context
+    if (egl_context != EGL_NO_CONTEXT) {
+      eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    }
   }
-  
-  // Unbind the FBO before returning to Flutter to avoid interfering with Flutter's rendering
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
   
   *target = GL_TEXTURE_2D;
   *name = self->name;
   *width = self->current_width;
   *height = self->current_height;
+  
   if (self->name == 0 && self->fbo == 0) {
     // This means that required_width > 0 && required_height > 0 code-path
     // hasn't been executed yet (because first frame isn't available yet).
-    // Just creating a dummy texture & FBO; prevent Flutter from complaining.
-    glGenFramebuffers(1, &self->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
+    // Just creating a dummy texture; prevent Flutter from complaining.
     glGenTextures(1, &self->name);
     glBindTexture(GL_TEXTURE_2D, self->name);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     *name = self->name;
     *width = 1;
     *height = 1;
-  }
-  
-  // If we switched to our context, restore the previous context
-  if (need_context_switch && current_ctx != NULL) {
-    gdk_gl_context_make_current(current_ctx);
-  } else if (need_context_switch) {
-    // If there was no previous context, clear the current context
-    gdk_gl_context_clear_current();
   }
   
   return TRUE;

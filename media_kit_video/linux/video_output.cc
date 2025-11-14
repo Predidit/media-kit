@@ -19,6 +19,9 @@ struct _VideoOutput {
   GObject parent_instance;
   TextureGL* texture_gl;
   GdkGLContext* gdk_gl_context;
+  EGLDisplay egl_display;
+  EGLContext egl_context;
+  EGLSurface egl_surface;
   guint8* pixel_buffer;
   TextureSW* texture_sw;
   GMutex mutex; /* Only used in S/W rendering. */
@@ -49,26 +52,30 @@ static void video_output_dispose(GObject* object) {
     fl_texture_registrar_unregister_texture(self->texture_registrar,
                                             FL_TEXTURE(self->texture_gl));
     
-    // Make GL context current before freeing mpv_render_context
-    // mpv_render_context_free requires the GL context to be current
-    if (self->gdk_gl_context != NULL && self->render_context != NULL) {
-      GdkGLContext* current_ctx = gdk_gl_context_get_current();
-      gboolean need_restore = (current_ctx != self->gdk_gl_context);
-      if (need_restore) {
-        gdk_gl_context_make_current(self->gdk_gl_context);
+    // Free mpv_render_context with our own EGL context
+    if (self->render_context != NULL) {
+      if (self->egl_context != EGL_NO_CONTEXT) {
+        eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface, self->egl_context);
       }
       mpv_render_context_free(self->render_context);
       self->render_context = NULL;
-      if (need_restore) {
-        if (current_ctx != NULL) {
-          gdk_gl_context_make_current(current_ctx);
-        } else {
-          gdk_gl_context_clear_current();
-        }
-      }
+      eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
+    
+    // Clean up EGL resources
+    if (self->egl_context != EGL_NO_CONTEXT) {
+      eglDestroyContext(self->egl_display, self->egl_context);
+      self->egl_context = EGL_NO_CONTEXT;
+    }
+    if (self->egl_surface != EGL_NO_SURFACE) {
+      eglDestroySurface(self->egl_display, self->egl_surface);
+      self->egl_surface = EGL_NO_SURFACE;
+    }
+    
     g_object_unref(self->texture_gl);
-    g_object_unref(self->gdk_gl_context);
+    if (self->gdk_gl_context != NULL) {
+      g_object_unref(self->gdk_gl_context);
+    }
   }
   // S/W
   if (self->texture_sw) {
@@ -83,8 +90,6 @@ static void video_output_dispose(GObject* object) {
   }
   
   g_mutex_clear(&self->mutex);
-  g_print("media_kit: VideoOutput: video_output_dispose: %ld\n",
-          (gint64)self->handle);
   G_OBJECT_CLASS(video_output_parent_class)->dispose(object);
 }
 
@@ -95,6 +100,9 @@ static void video_output_class_init(VideoOutputClass* klass) {
 static void video_output_init(VideoOutput* self) {
   self->texture_gl = NULL;
   self->gdk_gl_context = NULL;
+  self->egl_display = EGL_NO_DISPLAY;
+  self->egl_context = EGL_NO_CONTEXT;
+  self->egl_surface = EGL_NO_SURFACE;
   self->texture_sw = NULL;
   self->pixel_buffer = NULL;
   self->handle = NULL;
@@ -113,7 +121,6 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                               FlView* view,
                               gint64 handle,
                               VideoOutputConfiguration configuration) {
-  g_print("media_kit: VideoOutput: video_output_new: %ld\n", handle);
   VideoOutput* self = VIDEO_OUTPUT(g_object_new(video_output_get_type(), NULL));
   self->texture_registrar = texture_registrar;
   self->handle = (mpv_handle*)handle;
@@ -132,71 +139,101 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
   // mpv_set_option_string(self->handle, "video-timing-offset", "0");
   gboolean hardware_acceleration_supported = FALSE;
   if (self->configuration.enable_hardware_acceleration) {
-    GError* error = NULL;
-    GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view));
-    self->gdk_gl_context = gdk_window_create_gl_context(window, &error);
-    if (error == NULL) {
-      // OpenGL context must be made current before creating mpv render context.
-      gdk_gl_context_realize(self->gdk_gl_context, &error);
-      if (error == NULL) {
-        // Make the OpenGL context current.
-        gdk_gl_context_make_current(self->gdk_gl_context);
-        // Create |FlTextureGL| and register it.
-        self->texture_gl = texture_gl_new(self);
-        if (fl_texture_registrar_register_texture(
-                texture_registrar, FL_TEXTURE(self->texture_gl))) {
-          // Request H/W decoding.
-          mpv_opengl_init_params gl_init_params{
-              [](auto, auto name) {
+    // Get Flutter's current EGL display and context to share resources
+    self->egl_display = eglGetCurrentDisplay();
+    EGLContext flutter_context = eglGetCurrentContext();
+    
+    if (self->egl_display != EGL_NO_DISPLAY) {
+      // Bind EGL API
+      eglBindAPI(EGL_OPENGL_API);
+      
+      // Create a pbuffer surface for our context (we don't need a real window)
+      EGLint pbuffer_attribs[] = {
+          EGL_WIDTH, 1,
+          EGL_HEIGHT, 1,
+          EGL_NONE,
+      };
+      
+      // Choose an EGL config
+      EGLint config_attribs[] = {
+          EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+          EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+          EGL_RED_SIZE, 8,
+          EGL_GREEN_SIZE, 8,
+          EGL_BLUE_SIZE, 8,
+          EGL_ALPHA_SIZE, 8,
+          EGL_NONE,
+      };
+      
+      EGLConfig config;
+      EGLint num_configs;
+      if (eglChooseConfig(self->egl_display, config_attribs, &config, 1, &num_configs)) {
+        // Create a pbuffer surface
+        self->egl_surface = eglCreatePbufferSurface(self->egl_display, config, pbuffer_attribs);
+        if (self->egl_surface != EGL_NO_SURFACE) {
+          // Create our own EGL context that shares with Flutter's context
+          EGLint context_attribs[] = {
+              EGL_NONE,
+          };
+          
+          self->egl_context = eglCreateContext(self->egl_display, config, 
+                                               flutter_context, context_attribs);
+          
+          if (self->egl_context != EGL_NO_CONTEXT) {
+            // Make our context current for initialization
+            if (eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface, self->egl_context)) {
+              // Now create texture and initialize mpv
+              self->texture_gl = texture_gl_new(self);
+              
+              if (fl_texture_registrar_register_texture(
+                      texture_registrar, FL_TEXTURE(self->texture_gl))) {
+                // Initialize mpv with our EGL context
+                mpv_opengl_init_params gl_init_params{
+                    [](auto, auto name) {
+                      return (void*)eglGetProcAddress(name);
+                    },
+                    NULL,
+                };
+                
+                mpv_render_param params[] = {
+                    {MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL},
+                    {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, (void*)&gl_init_params},
+                    {MPV_RENDER_PARAM_INVALID, (void*)0},
+                    {MPV_RENDER_PARAM_INVALID, (void*)0},
+                };
+                
+                // VAAPI acceleration requires passing X11/Wayland display.
                 GdkDisplay* display = gdk_display_get_default();
                 if (GDK_IS_WAYLAND_DISPLAY(display)) {
-                  return (void*)eglGetProcAddress(name);
+                  params[2].type = MPV_RENDER_PARAM_WL_DISPLAY;
+                  params[2].data = gdk_wayland_display_get_wl_display(display);
+                } else if (GDK_IS_X11_DISPLAY(display)) {
+                  params[2].type = MPV_RENDER_PARAM_X11_DISPLAY;
+                  params[2].data = gdk_x11_display_get_xdisplay(display);
                 }
-                if (GDK_IS_X11_DISPLAY(display)) {
-                  return (void*)glXGetProcAddressARB((const GLubyte*)name);
+                
+                if (mpv_render_context_create(&self->render_context, self->handle, params) == 0) {
+                  mpv_render_context_set_update_callback(
+                      self->render_context,
+                      [](void* data) {
+                        VideoOutput* self = (VideoOutput*)data;
+                        if (self->destroyed) {
+                          return;
+                        }
+                        fl_texture_registrar_mark_texture_frame_available(
+                            self->texture_registrar, FL_TEXTURE(self->texture_gl));
+                      },
+                      self);
+                  hardware_acceleration_supported = TRUE;
                 }
-                g_assert_not_reached();
-                return (void*)NULL;
-              },
-              NULL,
-          };
-          mpv_render_param params[] = {
-              {MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL},
-              {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, (void*)&gl_init_params},
-              {MPV_RENDER_PARAM_INVALID, (void*)0},
-              {MPV_RENDER_PARAM_INVALID, (void*)0},
-          };
-          // VAAPI acceleration requires passing X11/Wayland display.
-          GdkDisplay* display = gdk_display_get_default();
-          if (GDK_IS_WAYLAND_DISPLAY(display)) {
-            params[2].type = MPV_RENDER_PARAM_WL_DISPLAY;
-            params[2].data = gdk_wayland_display_get_wl_display(display);
-          } else if (GDK_IS_X11_DISPLAY(display)) {
-            params[2].type = MPV_RENDER_PARAM_X11_DISPLAY;
-            params[2].data = gdk_x11_display_get_xdisplay(display);
-          }
-          if (mpv_render_context_create(&self->render_context, self->handle,
-                                        params) == 0) {
-            mpv_render_context_set_update_callback(
-                self->render_context,
-                [](void* data) {
-                  VideoOutput* self = (VideoOutput*)data;
-                  if (self->destroyed) {
-                    return;
-                  }
-                  fl_texture_registrar_mark_texture_frame_available(
-                      self->texture_registrar, FL_TEXTURE(self->texture_gl));
-                },
-                self);
-            hardware_acceleration_supported = TRUE;
-            g_print("media_kit: VideoOutput: Using H/W rendering.\n");
+              }
+              
+              // Restore Flutter's context
+              eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, flutter_context);
+            }
           }
         }
       }
-    }
-    if (error) {
-      g_print("media_kit: VideoOutput: GError: %d\n", error->code);
-      g_print("media_kit: VideoOutput: GError: %s\n", error->message);
     }
   }
 #ifdef MPV_RENDER_API_TYPE_SW
@@ -307,6 +344,18 @@ mpv_render_context* video_output_get_render_context(VideoOutput* self) {
 
 GdkGLContext* video_output_get_gdk_gl_context(VideoOutput* self) {
   return self->gdk_gl_context;
+}
+
+EGLDisplay video_output_get_egl_display(VideoOutput* self) {
+  return self->egl_display;
+}
+
+EGLContext video_output_get_egl_context(VideoOutput* self) {
+  return self->egl_context;
+}
+
+EGLSurface video_output_get_egl_surface(VideoOutput* self) {
+  return self->egl_surface;
 }
 
 guint8* video_output_get_pixel_buffer(VideoOutput* self) {
