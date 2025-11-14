@@ -117,6 +117,13 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     
     // Unbind FBO
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    
+    // Use fence for synchronization to prevent flickering during heavy animations
+    GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (fence) {
+      glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000); // 100ms timeout
+      glDeleteSync(fence);
+    }
   }
   
   *target = GL_TEXTURE_2D;
