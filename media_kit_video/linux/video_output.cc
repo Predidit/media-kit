@@ -18,9 +18,9 @@
 struct _VideoOutput {
   GObject parent_instance;
   TextureGL* texture_gl;
-  EGLDisplay egl_display;
+  EGLDisplay egl_display; /* Flutter egl display. */
   EGLContext egl_context;
-  EGLSurface egl_surface;
+  EGLSurface egl_surface; /* Flutter egl surface, not for redering, just for activting egl context */
   guint8* pixel_buffer;
   TextureSW* texture_sw;
   GMutex mutex; /* Only used in S/W rendering. */
