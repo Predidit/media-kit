@@ -18,7 +18,6 @@
 struct _VideoOutput {
   GObject parent_instance;
   TextureGL* texture_gl;
-  GdkGLContext* gdk_gl_context;
   EGLDisplay egl_display;
   EGLContext egl_context;
   EGLSurface egl_surface;
@@ -79,9 +78,6 @@ static void video_output_dispose(GObject* object) {
     // Note: Don't destroy egl_surface since we're using Flutter's surface
     
     g_object_unref(self->texture_gl);
-    if (self->gdk_gl_context != NULL) {
-      g_object_unref(self->gdk_gl_context);
-    }
   }
   // S/W
   if (self->texture_sw) {
@@ -105,7 +101,6 @@ static void video_output_class_init(VideoOutputClass* klass) {
 
 static void video_output_init(VideoOutput* self) {
   self->texture_gl = NULL;
-  self->gdk_gl_context = NULL;
   self->egl_display = EGL_NO_DISPLAY;
   self->egl_context = EGL_NO_CONTEXT;
   self->egl_surface = EGL_NO_SURFACE;
@@ -253,7 +248,6 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
     // H/W rendering failed. Fallback to S/W rendering.
     self->pixel_buffer = g_new0(guint8, SW_RENDERING_PIXEL_BUFFER_SIZE);
     self->texture_gl = NULL;
-    self->gdk_gl_context = NULL;
     self->texture_sw = texture_sw_new(self);
     if (fl_texture_registrar_register_texture(texture_registrar,
                                               FL_TEXTURE(self->texture_sw))) {
@@ -345,10 +339,6 @@ void video_output_set_size(VideoOutput* self, gint64 width, gint64 height) {
 
 mpv_render_context* video_output_get_render_context(VideoOutput* self) {
   return self->render_context;
-}
-
-GdkGLContext* video_output_get_gdk_gl_context(VideoOutput* self) {
-  return self->gdk_gl_context;
 }
 
 EGLDisplay video_output_get_egl_display(VideoOutput* self) {
