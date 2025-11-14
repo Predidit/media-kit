@@ -32,23 +32,18 @@ static void texture_gl_init(TextureGL* self) {
 
 static void texture_gl_dispose(GObject* object) {
   TextureGL* self = TEXTURE_GL(object);
-  g_print("media_kit: TextureGL: dispose called.\n");
   // Clean up OpenGL resources
-  // Flutter manages the GL context, so resources should be valid when dispose is called
   if (self->name != 0) {
-    g_print("media_kit: TextureGL: Deleting texture %u.\n", self->name);
     glDeleteTextures(1, &self->name);
     self->name = 0;
   }
   if (self->fbo != 0) {
-    g_print("media_kit: TextureGL: Deleting FBO %u.\n", self->fbo);
     glDeleteFramebuffers(1, &self->fbo);
     self->fbo = 0;
   }
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
-  g_print("media_kit: TextureGL: dispose completed.\n");
   G_OBJECT_CLASS(texture_gl_parent_class)->dispose(object);
 }
 
@@ -75,65 +70,34 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   gint32 required_width = (guint32)video_output_get_width(video_output);
   gint32 required_height = (guint32)video_output_get_height(video_output);
   
-  g_print("media_kit: TextureGL: populate_texture called. required_width=%d, required_height=%d\n", 
-          required_width, required_height);
-  
   if (required_width > 0 && required_height > 0) {
     gboolean first_frame = self->name == 0 || self->fbo == 0;
     gboolean resize = self->current_width != required_width ||
                       self->current_height != required_height;
     if (first_frame || resize) {
-      g_print("media_kit: TextureGL: Creating/resizing texture. first_frame=%d, resize=%d\n", first_frame, resize);
-      // Free previous texture & FBO.
+      // Free previous texture & FBO
       if (!first_frame) {
-        g_print("media_kit: TextureGL: Deleting previous texture %u and FBO %u.\n", self->name, self->fbo);
         glDeleteTextures(1, &self->name);
         glDeleteFramebuffers(1, &self->fbo);
       }
-      // Create new texture & FBO.
+      // Create new texture & FBO
       glGenFramebuffers(1, &self->fbo);
       glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
       glGenTextures(1, &self->name);
       glBindTexture(GL_TEXTURE_2D, self->name);
-      g_print("media_kit: TextureGL: Created new texture %u and FBO %u.\n", self->name, self->fbo);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, required_width, required_height,
                    0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      // Attach the texture to the FBO.
+      // Attach the texture to the FBO
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                              GL_TEXTURE_2D, self->name, 0);
       self->current_width = required_width;
       self->current_height = required_height;
       // Unbind FBO immediately after creation
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
-      g_print("media_kit: TextureGL: Texture and FBO setup complete. Notifying Flutter.\n");
-      // Notify Flutter about the change in texture's dimensions.
+      // Notify Flutter about the change in texture's dimensions
       video_output_notify_texture_update(video_output);
-    }
-    
-    // Save Flutter's current context to restore later
-    EGLDisplay egl_display = video_output_get_egl_display(video_output);
-    EGLContext egl_context = video_output_get_egl_context(video_output);
-    EGLSurface egl_surface = video_output_get_egl_surface(video_output);
-    EGLContext flutter_context = eglGetCurrentContext();
-    EGLSurface flutter_draw_surface = eglGetCurrentSurface(EGL_DRAW);
-    EGLSurface flutter_read_surface = eglGetCurrentSurface(EGL_READ);
-    
-    // Check if we're using Flutter's surface (not a pbuffer)
-    gboolean using_flutter_surface = video_output_is_using_flutter_surface(video_output);
-    
-    g_print("media_kit: TextureGL: Switching to mpv EGL context. Flutter=%p, mpv=%p, using_flutter_surface=%d\n", 
-            flutter_context, egl_context, using_flutter_surface);
-    
-    // Only switch contexts if we have our own pbuffer surface
-    // If we're using Flutter's surface, we must stay in Flutter's context
-    if (!using_flutter_surface && egl_context != EGL_NO_CONTEXT) {
-      if (!eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context)) {
-        g_printerr("media_kit: TextureGL: Failed to switch to mpv EGL context. Error: 0x%x\n", eglGetError());
-      }
-    } else if (using_flutter_surface) {
-      g_print("media_kit: TextureGL: Using Flutter's surface, staying in Flutter's context.\n");
     }
     
     glBindFramebuffer(GL_FRAMEBUFFER, self->fbo);
@@ -141,7 +105,6 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     mpv_render_context* render_context =
         video_output_get_render_context(video_output);
     
-    g_print("media_kit: TextureGL: Rendering frame to FBO %u.\n", self->fbo);
     // Render the frame
     mpv_opengl_fbo fbo{(gint32)self->fbo, required_width, required_height, 0};
     int flip_y = 0;
@@ -151,20 +114,9 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
         {MPV_RENDER_PARAM_INVALID, NULL},
     };
     mpv_render_context_render(render_context, params);
-    g_print("media_kit: TextureGL: Frame rendered successfully.\n");
     
-    // Unbind FBO before switching context
+    // Unbind FBO
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    
-    // Restore Flutter's EGL context only if we switched away from it
-    if (!using_flutter_surface && egl_context != EGL_NO_CONTEXT && flutter_context != EGL_NO_CONTEXT) {
-      g_print("media_kit: TextureGL: Restoring Flutter EGL context.\n");
-      if (eglMakeCurrent(egl_display, flutter_draw_surface, flutter_read_surface, flutter_context)) {
-        g_print("media_kit: TextureGL: Flutter EGL context restored successfully.\n");
-      } else {
-        g_printerr("media_kit: TextureGL: Failed to restore Flutter EGL context. Error: 0x%x\n", eglGetError());
-      }
-    }
   }
   
   *target = GL_TEXTURE_2D;
@@ -172,14 +124,10 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   *width = self->current_width;
   *height = self->current_height;
   
-  g_print("media_kit: TextureGL: Returning texture. name=%u, width=%u, height=%u\n", 
-          self->name, self->current_width, self->current_height);
-  
   if (self->name == 0 && self->fbo == 0) {
     // This means that required_width > 0 && required_height > 0 code-path
     // hasn't been executed yet (because first frame isn't available yet).
     // Just creating a dummy texture; prevent Flutter from complaining.
-    g_print("media_kit: TextureGL: Creating dummy texture (no frame available yet).\n");
     glGenTextures(1, &self->name);
     glBindTexture(GL_TEXTURE_2D, self->name);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
