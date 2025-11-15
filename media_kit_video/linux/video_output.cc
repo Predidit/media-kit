@@ -18,9 +18,9 @@
 struct _VideoOutput {
   GObject parent_instance;
   TextureGL* texture_gl;
-  EGLDisplay egl_display; /* Shared flutter egl display. */
-  EGLContext egl_context;
-  EGLSurface egl_surface; /* Place holder surface, not for redering, just for activting egl context */
+  EGLDisplay egl_display; /* Isolated EGL display for mpv rendering. */
+  EGLContext egl_context; /* Isolated EGL context (non-shared). */
+  EGLSurface egl_surface; /* Place holder surface for activating egl context */
   guint8* pixel_buffer;
   TextureSW* texture_sw;
   GMutex mutex; /* Only used in S/W rendering. */
@@ -52,21 +52,22 @@ static void video_output_dispose(GObject* object) {
                                             FL_TEXTURE(self->texture_gl));
     
     // Save Flutter's current context before cleanup
+    EGLDisplay current_display = eglGetCurrentDisplay();
     EGLContext flutter_context = eglGetCurrentContext();
     EGLSurface flutter_draw_surface = eglGetCurrentSurface(EGL_DRAW);
     EGLSurface flutter_read_surface = eglGetCurrentSurface(EGL_READ);
     
-    // Free mpv_render_context with our own EGL context
+    // Free mpv_render_context with our own isolated EGL context
     if (self->render_context != NULL) {
       if (self->egl_context != EGL_NO_CONTEXT) {
-        eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface, self->egl_context);
+        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, self->egl_context);
       }
       mpv_render_context_free(self->render_context);
       self->render_context = NULL;
       
       // Restore Flutter's context
       if (flutter_context != EGL_NO_CONTEXT) {
-        eglMakeCurrent(self->egl_display, flutter_draw_surface, flutter_read_surface, flutter_context);
+        eglMakeCurrent(current_display, flutter_draw_surface, flutter_read_surface, flutter_context);
       }
     }
     
@@ -75,7 +76,6 @@ static void video_output_dispose(GObject* object) {
       eglDestroyContext(self->egl_display, self->egl_context);
       self->egl_context = EGL_NO_CONTEXT;
     }
-    // No surface to destroy since we use EGL_NO_SURFACE
     
     g_object_unref(self->texture_gl);
   }
@@ -140,53 +140,63 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
   // mpv_set_option_string(self->handle, "video-timing-offset", "0");
   gboolean hardware_acceleration_supported = FALSE;
   if (self->configuration.enable_hardware_acceleration) {
-    // Get Flutter's current EGL display and context to share resources
-    self->egl_display = eglGetCurrentDisplay();
+    // Get Flutter's current EGL display (DO NOT share context)
+    EGLDisplay flutter_display = eglGetCurrentDisplay();
     EGLContext flutter_context = eglGetCurrentContext();
     EGLSurface flutter_draw_surface = eglGetCurrentSurface(EGL_DRAW);
     EGLSurface flutter_read_surface = eglGetCurrentSurface(EGL_READ);
     
-    if (self->egl_display != EGL_NO_DISPLAY && flutter_context != EGL_NO_CONTEXT) {
-      // Bind OpenGL ES API (Flutter uses OpenGL ES on Linux, not desktop OpenGL)
+    if (flutter_display != EGL_NO_DISPLAY && flutter_context != EGL_NO_CONTEXT) {
+      self->egl_display = flutter_display;
+      
+      // Bind OpenGL ES API (Flutter uses OpenGL ES on Linux)
       eglBindAPI(EGL_OPENGL_ES_API);
       
+      // Query Flutter's EGL config and reuse it for compatibility
       EGLConfig config = NULL;
-      EGLint num_configs = 0;
-      
-      // Query Flutter's EGL config ID and reuse it
       EGLint config_id = 0;
+      
       if (eglQueryContext(self->egl_display, flutter_context, EGL_CONFIG_ID, &config_id)) {
+        g_print("media_kit: VideoOutput: Flutter's EGL config ID: %d\n", config_id);
+        
+        // Get Flutter's exact config
+        EGLint num_configs = 0;
         EGLint config_attribs[] = { EGL_CONFIG_ID, config_id, EGL_NONE };
-        eglChooseConfig(self->egl_display, config_attribs, &config, 1, &num_configs);
+        
+        if (eglChooseConfig(self->egl_display, config_attribs, &config, 1, &num_configs) && num_configs > 0) {
+          g_print("media_kit: VideoOutput: Using Flutter's EGL config.\n");
+        } else {
+          g_printerr("media_kit: VideoOutput: Failed to get Flutter's EGL config by ID.\n");
+          config = NULL;
+        }
+      } else {
+        g_printerr("media_kit: VideoOutput: Failed to query Flutter's EGL config ID.\n");
       }
-
-      if (num_configs > 0 && config != NULL) {
-        // Use EGL_NO_SURFACE for surfaceless rendering (requires EGL 1.5+)
-        // Modern Linux systems should support this
+      
+      if (config != NULL) {
+        // Initialize EGL version info
         EGLint major = 0, minor = 0;
         eglInitialize(self->egl_display, &major, &minor);
-        self->egl_surface = EGL_NO_SURFACE;
         
-        // Create our own EGL context that shares with Flutter's context
+        // Create an isolated EGL context (NOT shared with Flutter)
+        // This prevents OpenGL state pollution and resource contention
         EGLint context_attribs[] = {
             EGL_CONTEXT_CLIENT_VERSION, 2,
             EGL_NONE,
         };
         
         self->egl_context = eglCreateContext(self->egl_display, config, 
-                                             flutter_context, context_attribs);
+                                             EGL_NO_CONTEXT, context_attribs);
         
         if (self->egl_context != EGL_NO_CONTEXT) {
-          // Make our context current for initialization (surfaceless)
-          EGLint make_current_result = eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, 
-                                                       EGL_NO_SURFACE, self->egl_context);
-          if (make_current_result) {
-            // Create texture and initialize mpv
+          // Make our isolated context current for initialization (surfaceless)
+          if (eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, self->egl_context)) {
+            // Create texture with our isolated context
             self->texture_gl = texture_gl_new(self);
             
             if (fl_texture_registrar_register_texture(
                     texture_registrar, FL_TEXTURE(self->texture_gl))) {
-              // Initialize mpv with our EGL context
+              // Initialize mpv with our isolated EGL context
               mpv_opengl_init_params gl_init_params{
                   [](auto, auto name) {
                     return (void*)eglGetProcAddress(name);
@@ -224,7 +234,7 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                     },
                     self);
                 hardware_acceleration_supported = TRUE;
-                g_print("media_kit: VideoOutput: H/W rendering.\n");
+                g_print("media_kit: VideoOutput: H/W rendering with isolated EGL context.\n");
               } else {
                 g_printerr("media_kit: VideoOutput: Failed to create mpv_render_context.\n");
               }
@@ -233,15 +243,15 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
             }
             
             // Restore Flutter's context
-            eglMakeCurrent(self->egl_display, flutter_draw_surface, flutter_read_surface, flutter_context);
+            eglMakeCurrent(flutter_display, flutter_draw_surface, flutter_read_surface, flutter_context);
           } else {
-            g_printerr("media_kit: VideoOutput: Failed to make EGL context current. Error: 0x%x\n", eglGetError());
+            g_printerr("media_kit: VideoOutput: Failed to make isolated EGL context current. Error: 0x%x\n", eglGetError());
           }
         } else {
-          g_printerr("media_kit: VideoOutput: Failed to create EGL context. Error: 0x%x\n", eglGetError());
+          g_printerr("media_kit: VideoOutput: Failed to create isolated EGL context. Error: 0x%x\n", eglGetError());
         }
       } else {
-        g_printerr("media_kit: VideoOutput: Failed to get Flutter's EGL config.\n");
+        g_printerr("media_kit: VideoOutput: Could not obtain Flutter's EGL config.\n");
       }
     } else {
       g_printerr("media_kit: VideoOutput: EGL display or context is invalid.\n");
