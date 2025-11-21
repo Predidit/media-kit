@@ -23,8 +23,12 @@ class FullscreenInheritedWidget extends InheritedWidget {
   }) : super(child: _FullscreenInheritedWidgetPopScope(child: child));
 
   static FullscreenInheritedWidget? maybeOf(BuildContext context) {
-    return context
-        .dependOnInheritedWidgetOfExactType<FullscreenInheritedWidget>();
+    try {
+      return context
+          .dependOnInheritedWidgetOfExactType<FullscreenInheritedWidget>();
+    } catch (e) {
+      return null;
+    }
   }
 
   static FullscreenInheritedWidget of(BuildContext context) {

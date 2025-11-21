@@ -501,8 +501,12 @@ class MaterialVideoControlsTheme extends InheritedWidget {
   });
 
   static MaterialVideoControlsTheme? maybeOf(BuildContext context) {
-    return context
-        .dependOnInheritedWidgetOfExactType<MaterialVideoControlsTheme>();
+    try {
+      return context
+          .dependOnInheritedWidgetOfExactType<MaterialVideoControlsTheme>();
+    } catch (e) {
+      return null;
+    }
   }
 
   static MaterialVideoControlsTheme of(BuildContext context) {
@@ -530,8 +534,9 @@ class _MaterialVideoControls extends StatefulWidget {
 
 /// {@macro material_video_controls}
 class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
-  late bool mount = _theme(context).visibleOnMount;
-  late bool visible = _theme(context).visibleOnMount;
+  late bool mount;
+  late bool visible;
+  bool _initialized = false;
   Timer? _timer;
 
   double _brightnessValue = 0.0;
@@ -602,6 +607,14 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Initialize theme-dependent values here, after InheritedWidgets are available
+    if (!_initialized) {
+      mount = _theme(context).visibleOnMount;
+      visible = _theme(context).visibleOnMount;
+      _volumeValue = _theme(context).initialVolume ?? 0.5;
+      _brightnessValue = _theme(context).initialBrightness ?? 0.5;
+      _initialized = true;
+    }
     if (subscriptions.isEmpty) {
       subscriptions.addAll(
         [
@@ -790,9 +803,9 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   @override
   void initState() {
     super.initState();
-    // Initialize with theme values or defaults
-    _volumeValue = _theme(context).initialVolume ?? 0.5;
-    _brightnessValue = _theme(context).initialBrightness ?? 0.5;
+    // Initialize with default values, will be updated in didChangeDependencies
+    _volumeValue = 0.5;
+    _brightnessValue = 0.5;
   }
 
   void setVolume(double value) {
