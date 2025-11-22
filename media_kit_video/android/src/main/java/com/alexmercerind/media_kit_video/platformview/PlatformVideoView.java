@@ -85,8 +85,6 @@ public final class PlatformVideoView implements PlatformView {
                     Log.i(TAG, "surfaceCreated: created new wid=" + wid);
                     holder.setFixedSize(width, height);
                     // Notify Dart side about the PlatformView Surface availability
-                    // Use 0x0 for size initially, actual video size will be set later via SetSurfaceSize
-                    // videoOutputManager.notifyPlatformViewSurfaceAvailable(handle, wid, width, height);
                     onSurfaceAvailable.accept(wid);
                 }
             }
@@ -95,13 +93,12 @@ public final class PlatformVideoView implements PlatformView {
             public void surfaceChanged(
                     @NonNull SurfaceHolder holder, int format, int width, int height) {
                 Log.i(TAG, String.format("surfaceChanged: handle=%d, width=%d, height=%d, wid=%d", handle, width, height, wid));
-                // videoOutputManager.notifyPlatformViewSurfaceAvailable(handle, wid, width, height);
             }
 
             @Override
             public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
                 Log.i(TAG, "surfaceDestroyed: handle=" + handle + ", wid=" + wid);
-                // videoOutputManager.notifyPlatformViewSurfaceAvailable(handle, 0, width, height);
+                onSurfaceAvailable.accept(0L);
                 if (wid != 0) {
                     final long widReference = wid;
                     handler.postDelayed(() -> GlobalObjectRefManager.deleteGlobalObjectRef(widReference), 5000);
@@ -126,10 +123,6 @@ public final class PlatformVideoView implements PlatformView {
     @Override
     public void dispose() {
         Log.i(TAG, "dispose: handle=" + handle);
-        if (wid != 0) {
-            GlobalObjectRefManager.deleteGlobalObjectRef(wid);
-            wid = 0;
-        }
         if (surfaceView.getHolder().getSurface() != null) {
             surfaceView.getHolder().getSurface().release();
         }
