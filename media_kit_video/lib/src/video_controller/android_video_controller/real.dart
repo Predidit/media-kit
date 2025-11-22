@@ -83,6 +83,7 @@ class AndroidVideoController extends PlatformVideoController {
     super.player,
     super.configuration,
   ) {
+    _channel; // Access _channel to trigger its initialization when the class is first accessed.
     wid.addListener(widListener);
     videoParamsSubscription = player.stream.videoParams.listen(
       (event) => lock.synchronized(() async {
@@ -106,14 +107,19 @@ class AndroidVideoController extends PlatformVideoController {
 
         final handle = await player.handle;
 
-        await _channel.invokeMethod(
-          'VideoOutputManager.SetSurfaceSize',
-          {
-            'handle': handle.toString(),
-            'width': width.toString(),
-            'height': height.toString(),
-          },
-        );
+        // For PlatformView, we don't need to call SetSurfaceSize
+        // The Surface size is managed by the PlatformView itself
+        // We only need to update the rect and trigger widListener if wid is already set
+        if (!configuration.usePlatformView) {
+          await _channel.invokeMethod(
+            'VideoOutputManager.SetSurfaceSize',
+            {
+              'handle': handle.toString(),
+              'width': width.toString(),
+              'height': height.toString(),
+            },
+          );
+        }
 
         rect.value = Rect.fromLTWH(
           0.0,
@@ -184,12 +190,23 @@ class AndroidVideoController extends PlatformVideoController {
     // Store the [VideoController] in the [_controllers].
     _controllers[handle] = controller;
 
-    await _channel.invokeMethod(
-      'VideoOutputManager.Create',
-      {
-        'handle': handle.toString(),
-      },
-    );
+    // For PlatformView, we don't create VideoOutput (SurfaceProducer) here
+    // The Surface will be provided by PlatformViewVideo widget
+    // For TextureView, create VideoOutput normally
+    if (!configuration.usePlatformView) {
+      await _channel.invokeMethod(
+        'VideoOutputManager.Create',
+        {
+          'handle': handle.toString(),
+        },
+      );
+    }
+    // For PlatformView, we need to wait for the Surface to be available
+    // This will be handled by PlatformViewSurfaceAvailable callback
+    // and then we set the id to the handle
+    if (configuration.usePlatformView) {
+      controller.id.value = handle;
+    }
 
     await controller.setProperties(
       {
@@ -283,6 +300,14 @@ class AndroidVideoController extends PlatformVideoController {
                     if (!(completer?.isCompleted ?? true)) {
                       completer?.complete();
                     }
+                    break;
+                  }
+                case 'PlatformVideoView.SurfaceAvailable':
+                  {
+                    // Notify about PlatformView Surface availability
+                    final int handle = call.arguments['handle'];
+                    final int wid = call.arguments['wid'];
+                    _controllers[handle]?.wid.value = wid;
                     break;
                   }
                 default:
