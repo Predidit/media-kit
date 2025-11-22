@@ -65,13 +65,17 @@ class AndroidVideoController extends PlatformVideoController {
           'vo': voValue,
           // It is important to re-initialize --vid in-case of --vo=mediacodec_embed.
           // Not doing so causes error "Could not open codec." & video never gets rendered.
-          if (configuration.vo == 'mediacodec_embed') 'vid': vidValue,
+          if (configuration.vo == 'mediacodec_embed' &&
+              !configuration.usePlatformView)
+            'vid': vidValue,
         },
       );
       // Instead of seeking to the start (Duration.zero), seek to the current playback position
       // without jumping the user to the start of the media.
-      final currentPosition = player.state.position;
-      await player.seek(currentPosition);
+      if (widValue != '0') {
+        final currentPosition = player.state.position;
+        await player.seek(currentPosition);
+      }
     });
   }
 
