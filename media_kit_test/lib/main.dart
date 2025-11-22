@@ -68,13 +68,25 @@ class PrimaryScreen extends StatelessWidget {
             valueListenable: configuration,
             builder: (context, value, _) => TextButton(
               onPressed: () {
-                configuration.value = VideoControllerConfiguration(
+                configuration.value = value.copyWith(
                   enableHardwareAcceleration: !value.enableHardwareAcceleration,
                 );
               },
               child: Text(value.enableHardwareAcceleration ? 'H/W' : 'S/W'),
             ),
           ),
+          if (UniversalPlatform.isAndroid)
+            ValueListenableBuilder<VideoControllerConfiguration>(
+              valueListenable: configuration,
+              builder: (context, value, _) => TextButton(
+                onPressed: () {
+                  configuration.value = value.copyWith(
+                    usePlatformView: !value.usePlatformView,
+                  );
+                },
+                child: Text(value.usePlatformView ? 'PlatformView' : 'TextureView'),
+              ),
+            ),
           const SizedBox(width: 16.0),
         ],
       ),
