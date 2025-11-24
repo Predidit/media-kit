@@ -17,12 +17,14 @@ class PlatformViewVideo extends StatelessWidget {
     required this.handle,
     required this.width,
     required this.height,
+    this.useHCPP = false,
   });
 
   /// The handle (player ID) of the video player.
   final int handle;
   final int width;
   final int height;
+  final bool useHCPP;
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +49,15 @@ class PlatformViewVideo extends StatelessWidget {
           );
         },
         onCreatePlatformView: (PlatformViewCreationParams params) {
-          return PlatformViewsService.initSurfaceAndroidView(
+          return useHCPP ? PlatformViewsService.initHybridAndroidView(
+            id: params.id,
+            viewType: viewType,
+            layoutDirection:
+                Directionality.maybeOf(context) ?? TextDirection.ltr,
+            creationParams: creationParams,
+            creationParamsCodec: const StandardMessageCodec(),
+            onFocus: () => params.onFocusChanged(true),
+          ) : PlatformViewsService.initSurfaceAndroidView(
             id: params.id,
             viewType: viewType,
             layoutDirection:
