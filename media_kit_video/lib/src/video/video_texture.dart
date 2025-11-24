@@ -427,6 +427,7 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                                                           handle: id,
                                                           width: rect.width.toInt(),
                                                           height: rect.height.toInt(),
+                                                          useHCPP: notifier.configuration.useHCPP,
                                                         )
                                                       : Texture(
                                                           textureId: id,

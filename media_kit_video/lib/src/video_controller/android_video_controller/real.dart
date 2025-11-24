@@ -205,9 +205,7 @@ class AndroidVideoController extends PlatformVideoController {
         },
       );
     }
-    // For PlatformView, we need to wait for the Surface to be available
-    // This will be handled by PlatformViewSurfaceAvailable callback
-    // and then we set the id to the handle
+
     if (configuration.usePlatformView) {
       controller.id.value = handle;
     }
