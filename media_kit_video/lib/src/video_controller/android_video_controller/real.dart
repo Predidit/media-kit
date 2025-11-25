@@ -256,12 +256,14 @@ class AndroidVideoController extends PlatformVideoController {
     await videoParamsSubscription?.cancel();
     final handle = await player.handle;
     _controllers.remove(handle);
-    await _channel.invokeMethod(
-      'VideoOutputManager.Dispose',
-      {
-        'handle': handle.toString(),
-      },
-    );
+    if (!configuration.usePlatformView) {
+      await _channel.invokeMethod(
+        'VideoOutputManager.Dispose',
+        {
+          'handle': handle.toString(),
+        },
+      );
+    }
   }
 
   /// Currently created [AndroidVideoController]s.
