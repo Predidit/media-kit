@@ -247,16 +247,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     
     if (required_width > 0 && required_height > 0 && gl_thread) {
       self->initialization_posted = TRUE;
-      
-      // Post initialization task to GL thread asynchronously (don't wait)
-      gl_thread->Post([self, required_width, required_height, video_output]() {
-        texture_gl_check_and_resize(self, required_width, required_height);
-        
-        // After initialization, trigger a render to populate the texture
-        if (self->egl_image != EGL_NO_IMAGE_KHR) {
-          video_output_notify_render(video_output);
-        }
-      });
+      video_output_notify_render(video_output);
     }
   }
   
