@@ -343,26 +343,21 @@ gboolean texture_gl_render(TextureGL* self) {
 void texture_gl_swap_buffers(TextureGL* self) {
   // This is called from the GL render thread after rendering is complete
   // Triple buffering: write_index -> ready_index, find new write_index
+  //
+  // Buffer states:
+  // - display: currently being shown by Flutter (cannot write)
+  // - ready: waiting for Flutter to pick up (will be overwritten by new ready)
+  // - write: just finished rendering, will become new ready
   
   int write_idx = self->write_index;
   int display_idx = self->display_index.load(std::memory_order_acquire);
-  int old_ready_idx = self->ready_index.load(std::memory_order_acquire);
   
   // The just-rendered buffer becomes the new ready buffer
   self->ready_index.store(write_idx, std::memory_order_release);
   
-  // Find a new write buffer: must not be display or the new ready buffer
-  // Prefer the old ready buffer if available (it's safe to overwrite)
-  // Otherwise use any buffer that's not display
-  int new_write_idx;
-  
-  if (old_ready_idx >= 0 && old_ready_idx != display_idx) {
-    // Reuse old ready buffer - Flutter hasn't picked it up yet, and new frame supersedes it
-    new_write_idx = old_ready_idx;
-  } else {
-    // Find any buffer that's not display and not the new ready
-    new_write_idx = 3 - display_idx - write_idx;
-  }
+  // Find the third buffer (neither display nor the new ready)
+  // With 3 buffers indexed 0,1,2: third = 3 - a - b (when a != b)
+  int new_write_idx = 3 - display_idx - write_idx;
   
   self->write_index = new_write_idx;
 }
@@ -416,7 +411,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     gboolean render_complete = TRUE;
     if (ready_buf->render_sync != EGL_NO_SYNC_KHR) {
       EGLint result = _eglClientWaitSyncKHR(egl_display, ready_buf->render_sync, 
-                                            EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
+                                            0, 0);
       if (result == EGL_TIMEOUT_EXPIRED_KHR) {
         // Render not complete yet - don't switch, continue with current display buffer
         render_complete = FALSE;
@@ -428,13 +423,8 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
     
     if (render_complete) {
-      // Atomically claim the ready buffer as our display buffer
-      // Use CAS to avoid race with GL thread's swap_buffers
-      if (self->ready_index.compare_exchange_strong(ready_idx, -1, 
-                                                     std::memory_order_acq_rel)) {
-        self->display_index.store(ready_idx, std::memory_order_release);
-        display_idx = ready_idx;
-      }
+      self->display_index.store(ready_idx, std::memory_order_release);
+      display_idx = ready_idx;
     }
   }
   
