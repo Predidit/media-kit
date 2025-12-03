@@ -21,7 +21,7 @@ typedef EGLImageKHR (*PFNEGLCREATEIMAGEKHRPROC)(EGLDisplay dpy, EGLContext ctx, 
 typedef EGLBoolean (*PFNEGLDESTROYIMAGEKHRPROC)(EGLDisplay dpy, EGLImageKHR image);
 typedef void (*PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)(GLenum target, GLeglImageOES image);
 
-// EGL_KHR_fence_sync extension function pointers (available in EGL 1.4+)
+// EGL_KHR_fence_sync extension function pointers
 typedef EGLSyncKHR (*PFNEGLCREATESYNCKHRPROC)(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
 typedef EGLBoolean (*PFNEGLDESTROYSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync);
 typedef EGLint (*PFNEGLCLIENTWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
@@ -50,7 +50,7 @@ static void init_egl_extensions() {
     eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     
-    // EGL_KHR_fence_sync extensions (EGL 1.4+, required by Flutter)
+    // EGL_KHR_fence_sync extensions
     _eglCreateSyncKHR = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
     _eglDestroySyncKHR = (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
     _eglClientWaitSyncKHR = (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
@@ -110,7 +110,7 @@ static void texture_gl_dispose(GObject* object) {
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
-  // Clean up Flutter's textures (in Flutter's context)
+  // Clean up Flutter's textures
   for (int i = 0; i < NUM_BUFFERS; i++) {
     if (self->flutter_textures[i] != 0) {
       glDeleteTextures(1, &self->flutter_textures[i]);
@@ -181,6 +181,8 @@ TextureGL* texture_gl_new(VideoOutput* video_output) {
   return self;
 }
 
+/// This function is called from the dedicated rendering thread
+/// So we can directly perform OpenGL operations
 void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 required_height) {
   VideoOutput* video_output = self->video_output;
   
@@ -198,9 +200,6 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
   EGLContext egl_context = video_output_get_egl_context(video_output);
-  
-  // This function is called from the dedicated rendering thread
-  // So we can directly perform OpenGL operations
   
   // Switch to mpv's isolated context
   eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
