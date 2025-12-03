@@ -65,8 +65,8 @@ typedef struct {
   guint32 texture;          // Texture attached to FBO
   EGLImageKHR egl_image;    // EGLImage for sharing between contexts
   EGLSyncKHR render_sync;   // Sync created after mpv render completes (for Flutter to wait)
-  EGLSyncKHR flutter_sync;  // Sync created when Flutter starts reading (for mpv to wait)
   gboolean ready;           // Whether this buffer has valid content
+  std::atomic<gboolean> consumed;  // Whether Flutter has consumed this buffer (safe for mpv to reuse)
 } RenderBuffer;
 
 struct _TextureGL {
@@ -94,8 +94,8 @@ static void texture_gl_init(TextureGL* self) {
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
     self->buffers[i].render_sync = EGL_NO_SYNC_KHR;
-    self->buffers[i].flutter_sync = EGL_NO_SYNC_KHR;
     self->buffers[i].ready = FALSE;
+    self->buffers[i].consumed.store(TRUE);
   }
   self->front_index.store(0);
   self->back_index = 1;
@@ -134,10 +134,6 @@ static void texture_gl_dispose(GObject* object) {
         if (buf->render_sync != EGL_NO_SYNC_KHR) {
           _eglDestroySyncKHR(egl_display, buf->render_sync);
           buf->render_sync = EGL_NO_SYNC_KHR;
-        }
-        if (buf->flutter_sync != EGL_NO_SYNC_KHR) {
-          _eglDestroySyncKHR(egl_display, buf->flutter_sync);
-          buf->flutter_sync = EGL_NO_SYNC_KHR;
         }
         
         // Clean up EGLImage
@@ -224,11 +220,6 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
         _eglDestroySyncKHR(egl_display, buf->render_sync);
         buf->render_sync = EGL_NO_SYNC_KHR;
       }
-      if (buf->flutter_sync != EGL_NO_SYNC_KHR) {
-        _eglClientWaitSyncKHR(egl_display, buf->flutter_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-        _eglDestroySyncKHR(egl_display, buf->flutter_sync);
-        buf->flutter_sync = EGL_NO_SYNC_KHR;
-      }
       
       if (buf->egl_image != EGL_NO_IMAGE_KHR) {
         eglDestroyImageKHR(egl_display, buf->egl_image);
@@ -270,7 +261,7 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     
     buf->ready = FALSE;
     buf->render_sync = EGL_NO_SYNC_KHR;
-    buf->flutter_sync = EGL_NO_SYNC_KHR;
+    buf->consumed.store(TRUE);
   }
   
   // Flush to ensure textures are ready
@@ -311,18 +302,12 @@ gboolean texture_gl_render(TextureGL* self) {
     return FALSE;
   }
   
-  // Check if back buffer is still being used by Flutter
-  // The flutter_sync was created when Flutter started reading this buffer
-  if (back_buf->flutter_sync != EGL_NO_SYNC_KHR) {
-    EGLint result = _eglClientWaitSyncKHR(egl_display, back_buf->flutter_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
-    if (result == EGL_TIMEOUT_EXPIRED_KHR) {
-      // Back buffer still in use by Flutter, skip this frame
-      // The previous front buffer will continue to be displayed
-      return FALSE;
-    }
-    // Flutter finished using this buffer, destroy the sync
-    _eglDestroySyncKHR(egl_display, back_buf->flutter_sync);
-    back_buf->flutter_sync = EGL_NO_SYNC_KHR;
+  // Check if back buffer has been consumed by Flutter (delayed one frame)
+  // This ensures Flutter has had at least one full frame to finish reading
+  if (!back_buf->consumed.load()) {
+    // Back buffer not yet consumed by Flutter, skip this frame
+    // The previous front buffer will continue to be displayed
+    return FALSE;
   }
   
   // Destroy old render_sync if exists (from previous render cycle)
@@ -381,9 +366,15 @@ void texture_gl_swap_buffers(TextureGL* self) {
     self->front_index.store(back_idx);
     self->back_index = old_front;
     
-    // Reset the new back buffer's ready state
-    // (the old front buffer is now the new back buffer)
+    // The old front buffer is now the new back buffer
+    // Mark it as consumed (Flutter has had one full frame to read it)
+    // and reset its ready state
+    self->buffers[old_front].consumed.store(TRUE);
     self->buffers[old_front].ready = FALSE;
+    
+    // Mark the new front buffer as not consumed yet
+    // (Flutter will start reading it now)
+    back_buf->consumed.store(FALSE);
   }
   
   g_mutex_unlock(&self->swap_mutex);
@@ -425,18 +416,6 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     if (result == EGL_TIMEOUT_EXPIRED_KHR) {
       // Render not complete yet - keep using current texture, don't update
       // This avoids reading an incomplete frame
-      
-      // Still need to create flutter_sync to protect the buffer we're using
-      // Otherwise, after a swap, mpv might overwrite it while Flutter's GPU
-      // pipeline is still reading from it
-      if (front_buf->egl_image != EGL_NO_IMAGE_KHR) {
-        if (front_buf->flutter_sync != EGL_NO_SYNC_KHR) {
-          _eglDestroySyncKHR(egl_display, front_buf->flutter_sync);
-        }
-        // Flush GL commands before creating sync
-        glFlush();
-        front_buf->flutter_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
-      }
       
       g_mutex_unlock(&self->swap_mutex);
       
@@ -491,20 +470,6 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     video_output_notify_texture_update(video_output);
   }
   
-  // Handle sync for buffer protection
-  if (front_buf->egl_image != EGL_NO_IMAGE_KHR) {
-    // Destroy old flutter_sync if exists (from previous read cycle of this buffer)
-    if (front_buf->flutter_sync != EGL_NO_SYNC_KHR) {
-      _eglDestroySyncKHR(egl_display, front_buf->flutter_sync);
-    }
-    
-    // Flush GL commands before creating sync
-    glFlush();
-    
-    // Create sync fence to mark that Flutter is using this buffer
-    // mpv will check this before writing to ensure Flutter is done reading
-    front_buf->flutter_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
-  }
   
   *target = GL_TEXTURE_2D;
   *name = self->flutter_textures[front_idx];
