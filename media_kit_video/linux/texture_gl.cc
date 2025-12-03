@@ -70,13 +70,14 @@ typedef struct {
 
 struct _TextureGL {
   FlTextureGL parent_instance;
-  guint32 flutter_texture;       // Flutter's texture (single, rebinds to current front buffer)
+  guint32 flutter_textures[NUM_BUFFERS];  // Flutter's textures, one per buffer
+  gboolean flutter_textures_valid[NUM_BUFFERS];  // Whether Flutter textures are valid (need recreate after resize)
   RenderBuffer buffers[NUM_BUFFERS];  // Double buffer array
   std::atomic<int> front_index;  // Index of the front buffer (for Flutter to read)
   int back_index;                // Index of the back buffer (for mpv to render)
   guint32 current_width;
   guint32 current_height;
-  gboolean needs_flutter_texture_update;  // Flag to rebind Flutter texture
+  gboolean buffers_initialized;  // Flag to check if buffers are created
   gboolean initialization_posted;  // Flag to avoid duplicate initialization
   GMutex swap_mutex;             // Mutex for buffer swap synchronization
   VideoOutput* video_output;
@@ -85,8 +86,9 @@ struct _TextureGL {
 G_DEFINE_TYPE(TextureGL, texture_gl, fl_texture_gl_get_type())
 
 static void texture_gl_init(TextureGL* self) {
-  self->flutter_texture = 0;
   for (int i = 0; i < NUM_BUFFERS; i++) {
+    self->flutter_textures[i] = 0;
+    self->flutter_textures_valid[i] = FALSE;
     self->buffers[i].fbo = 0;
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
@@ -97,7 +99,7 @@ static void texture_gl_init(TextureGL* self) {
   self->back_index = 1;
   self->current_width = 1;
   self->current_height = 1;
-  self->needs_flutter_texture_update = FALSE;
+  self->buffers_initialized = FALSE;
   self->initialization_posted = FALSE;
   g_mutex_init(&self->swap_mutex);
   self->video_output = NULL;
@@ -108,10 +110,12 @@ static void texture_gl_dispose(GObject* object) {
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
-  // Clean up Flutter's texture (in Flutter's context)
-  if (self->flutter_texture != 0) {
-    glDeleteTextures(1, &self->flutter_texture);
-    self->flutter_texture = 0;
+  // Clean up Flutter's textures (in Flutter's context)
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    if (self->flutter_textures[i] != 0) {
+      glDeleteTextures(1, &self->flutter_textures[i]);
+      self->flutter_textures[i] = 0;
+    }
   }
   
   // Clean up double buffer resources in dedicated GL thread
@@ -184,9 +188,9 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     return;
   }
   
-  gboolean first_frame = self->buffers[0].fbo == 0 || self->buffers[1].fbo == 0;
-  gboolean resize = self->current_width != required_width ||
-                    self->current_height != required_height;
+  gboolean first_frame = !self->buffers_initialized;
+  gboolean resize = self->current_width != (guint32)required_width ||
+                    self->current_height != (guint32)required_height;
   
   if (!first_frame && !resize) {
     return;  // No resize needed
@@ -265,10 +269,15 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   self->front_index.store(0);
   self->back_index = 1;
   
-  // Mark that Flutter texture needs update
+  // Mark Flutter textures as invalid (need recreate in main thread)
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    self->flutter_textures_valid[i] = FALSE;
+  }
+  
+  // Mark buffers as initialized and update dimensions
+  self->buffers_initialized = TRUE;
   self->current_width = required_width;
   self->current_height = required_height;
-  self->needs_flutter_texture_update = TRUE;
   
   g_mutex_unlock(&self->swap_mutex);
 }
@@ -344,13 +353,10 @@ void texture_gl_swap_buffers(TextureGL* self) {
   
   // Only swap if back buffer has valid content
   if (back_buf->ready) {
-    // Atomically swap front and back indices
+    // Swap front and back indices
     int old_front = self->front_index.load();
     self->front_index.store(back_idx);
     self->back_index = old_front;
-    
-    // Mark that Flutter texture needs to rebind to new front buffer
-    self->needs_flutter_texture_update = TRUE;
   }
   
   g_mutex_unlock(&self->swap_mutex);
@@ -367,7 +373,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
   // Asynchronously trigger initialization on first call (non-blocking)
-  if (!self->initialization_posted && self->buffers[0].fbo == 0) {
+  if (!self->initialization_posted && !self->buffers_initialized) {
     gint64 required_width = video_output_get_width(video_output);
     gint64 required_height = video_output_get_height(video_output);
     
@@ -377,31 +383,22 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
   }
   
-  // Lock to safely access front buffer and its sync
-  g_mutex_lock(&self->swap_mutex);
-  
-  // Get current front buffer
+  // Get current front buffer index
   int front_idx = self->front_index.load();
   RenderBuffer* front_buf = &self->buffers[front_idx];
   
-  // Update Flutter's texture from EGLImage if resize happened or buffer swapped
-  if (self->needs_flutter_texture_update && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+  // Check if we need to create/recreate Flutter texture for this buffer
+  if (!self->flutter_textures_valid[front_idx] && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
     EGLDisplay egl_display = video_output_get_egl_display(video_output);
     
-    // Destroy any old sync on this buffer (from previous Flutter read cycle)
-    if (front_buf->sync != EGL_NO_SYNC_KHR) {
-      _eglDestroySyncKHR(egl_display, front_buf->sync);
-      front_buf->sync = EGL_NO_SYNC_KHR;
+    // Delete old texture if exists
+    if (self->flutter_textures[front_idx] != 0) {
+      glDeleteTextures(1, &self->flutter_textures[front_idx]);
     }
     
-    // Free previous Flutter texture
-    if (self->flutter_texture != 0) {
-      glDeleteTextures(1, &self->flutter_texture);
-    }
-    
-    // Create Flutter's texture from current front buffer's EGLImage
-    glGenTextures(1, &self->flutter_texture);
-    glBindTexture(GL_TEXTURE_2D, self->flutter_texture);
+    // Create Flutter's texture from this buffer's EGLImage
+    glGenTextures(1, &self->flutter_textures[front_idx]);
+    glBindTexture(GL_TEXTURE_2D, self->flutter_textures[front_idx]);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -409,38 +406,40 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, front_buf->egl_image);
     glBindTexture(GL_TEXTURE_2D, 0);
     
-    // Create sync fence to mark that Flutter is now using this buffer
-    // mpv will check this sync before writing to this buffer again
-    front_buf->sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+    self->flutter_textures_valid[front_idx] = TRUE;
     
-    self->needs_flutter_texture_update = FALSE;
-    
-    // Notify Flutter about dimension change (unlock before callback to avoid deadlock)
-    g_mutex_unlock(&self->swap_mutex);
+    // Notify Flutter about texture availability
     video_output_notify_texture_update(video_output);
-    
-    *target = GL_TEXTURE_2D;
-    *name = self->flutter_texture;
-    *width = self->current_width;
-    *height = self->current_height;
-    
-    return TRUE;
   }
   
-  g_mutex_unlock(&self->swap_mutex);
+  // Handle sync for buffer protection
+  if (front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+    EGLDisplay egl_display = video_output_get_egl_display(video_output);
+    
+    // Destroy old sync if exists (from previous read cycle of this buffer)
+    if (front_buf->sync != EGL_NO_SYNC_KHR) {
+      _eglDestroySyncKHR(egl_display, front_buf->sync);
+    }
+    
+    // Create sync fence to mark that Flutter is using this buffer
+    front_buf->sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+  }
   
   *target = GL_TEXTURE_2D;
-  *name = self->flutter_texture;
+  *name = self->flutter_textures[front_idx];
   *width = self->current_width;
   *height = self->current_height;
   
-  if (self->flutter_texture == 0) {
-    // First frame not yet available - create dummy texture in Flutter's context
-    glGenTextures(1, &self->flutter_texture);
-    glBindTexture(GL_TEXTURE_2D, self->flutter_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    *name = self->flutter_texture;
+  if (!self->flutter_textures_valid[front_idx] || self->flutter_textures[front_idx] == 0) {
+    // First frame not yet available - create dummy texture
+    static guint32 dummy_texture = 0;
+    if (dummy_texture == 0) {
+      glGenTextures(1, &dummy_texture);
+      glBindTexture(GL_TEXTURE_2D, dummy_texture);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    *name = dummy_texture;
     *width = 1;
     *height = 1;
   }
