@@ -425,6 +425,17 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     if (result == EGL_TIMEOUT_EXPIRED_KHR) {
       // Render not complete yet - keep using current texture, don't update
       // This avoids reading an incomplete frame
+      
+      // Still need to create flutter_sync to protect the buffer we're using
+      // Otherwise, after a swap, mpv might overwrite it while Flutter's GPU
+      // pipeline is still reading from it
+      if (front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+        if (front_buf->flutter_sync != EGL_NO_SYNC_KHR) {
+          _eglDestroySyncKHR(egl_display, front_buf->flutter_sync);
+        }
+        front_buf->flutter_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+      }
+      
       g_mutex_unlock(&self->swap_mutex);
       
       // Return current valid texture or dummy
