@@ -389,8 +389,6 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   
   // Check if we need to create/recreate Flutter texture for this buffer
   if (!self->flutter_textures_valid[front_idx] && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
-    EGLDisplay egl_display = video_output_get_egl_display(video_output);
-    
     // Delete old texture if exists
     if (self->flutter_textures[front_idx] != 0) {
       glDeleteTextures(1, &self->flutter_textures[front_idx]);
