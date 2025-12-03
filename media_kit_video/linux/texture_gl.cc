@@ -220,12 +220,12 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     if (!first_frame) {
       // Wait for any pending sync before destroying resources
       if (buf->render_sync != EGL_NO_SYNC_KHR) {
-        _eglClientWaitSyncKHR(egl_display, buf->render_sync, 0, EGL_FOREVER_KHR);
+        _eglClientWaitSyncKHR(egl_display, buf->render_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
         _eglDestroySyncKHR(egl_display, buf->render_sync);
         buf->render_sync = EGL_NO_SYNC_KHR;
       }
       if (buf->flutter_sync != EGL_NO_SYNC_KHR) {
-        _eglClientWaitSyncKHR(egl_display, buf->flutter_sync, 0, EGL_FOREVER_KHR);
+        _eglClientWaitSyncKHR(egl_display, buf->flutter_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
         _eglDestroySyncKHR(egl_display, buf->flutter_sync);
         buf->flutter_sync = EGL_NO_SYNC_KHR;
       }
@@ -314,7 +314,7 @@ gboolean texture_gl_render(TextureGL* self) {
   // Check if back buffer is still being used by Flutter
   // The flutter_sync was created when Flutter started reading this buffer
   if (back_buf->flutter_sync != EGL_NO_SYNC_KHR) {
-    EGLint result = _eglClientWaitSyncKHR(egl_display, back_buf->flutter_sync, 0, 0);
+    EGLint result = _eglClientWaitSyncKHR(egl_display, back_buf->flutter_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
     if (result == EGL_TIMEOUT_EXPIRED_KHR) {
       // Back buffer still in use by Flutter, skip this frame
       // The previous front buffer will continue to be displayed
@@ -421,7 +421,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   // Check if the front buffer's render is complete
   // If not complete, we continue using the current texture (previous frame)
   if (front_buf->render_sync != EGL_NO_SYNC_KHR) {
-    EGLint result = _eglClientWaitSyncKHR(egl_display, front_buf->render_sync, 0, 0);
+    EGLint result = _eglClientWaitSyncKHR(egl_display, front_buf->render_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
     if (result == EGL_TIMEOUT_EXPIRED_KHR) {
       // Render not complete yet - keep using current texture, don't update
       // This avoids reading an incomplete frame
@@ -433,6 +433,8 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
         if (front_buf->flutter_sync != EGL_NO_SYNC_KHR) {
           _eglDestroySyncKHR(egl_display, front_buf->flutter_sync);
         }
+        // Flush GL commands before creating sync
+        glFlush();
         front_buf->flutter_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
       }
       
@@ -495,6 +497,9 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     if (front_buf->flutter_sync != EGL_NO_SYNC_KHR) {
       _eglDestroySyncKHR(egl_display, front_buf->flutter_sync);
     }
+    
+    // Flush GL commands before creating sync
+    glFlush();
     
     // Create sync fence to mark that Flutter is using this buffer
     // mpv will check this before writing to ensure Flutter is done reading
