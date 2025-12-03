@@ -24,16 +24,24 @@ TextureGL* texture_gl_new(VideoOutput* video_output);
 
 /**
  * @brief Checks if texture needs resize and performs it if necessary.
+ * This manages double buffering - creates/resizes both front and back buffers.
  */
 void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 required_height);
 
 /**
- * @brief Renders mpv frame to texture (called from dedicated thread).
+ * @brief Renders mpv frame to the back buffer (called from dedicated thread).
+ * Uses EGLSync for synchronization instead of glFinish.
  */
 void texture_gl_render(TextureGL* self);
 
 /**
- * @brief Populates texture with video frame.
+ * @brief Swaps front and back buffers after rendering is complete.
+ * Called from dedicated GL thread after render finishes.
+ */
+void texture_gl_swap_buffers(TextureGL* self);
+
+/**
+ * @brief Populates texture with video frame from the current front buffer.
  */
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
                                      guint32* target,
