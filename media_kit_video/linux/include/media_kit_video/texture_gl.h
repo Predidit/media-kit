@@ -31,8 +31,9 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
 /**
  * @brief Renders mpv frame to the back buffer (called from dedicated thread).
  * Uses EGLSync for synchronization instead of glFinish.
+ * @return TRUE if rendering was performed, FALSE if skipped.
  */
-void texture_gl_render(TextureGL* self);
+gboolean texture_gl_render(TextureGL* self);
 
 /**
  * @brief Swaps front and back buffers after rendering is complete.

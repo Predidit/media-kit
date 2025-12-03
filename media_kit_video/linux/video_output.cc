@@ -552,13 +552,16 @@ void video_output_render(VideoOutput* self) {
   // H/W rendering with double buffering
   if (self->texture_gl && self->render_context) {
     // Render to back buffer
-    texture_gl_render(self->texture_gl);
+    gboolean rendered = texture_gl_render(self->texture_gl);
     
-    // Swap front and back buffers
-    texture_gl_swap_buffers(self->texture_gl);
-    
-    // Notify Flutter that a new frame is available
-    fl_texture_registrar_mark_texture_frame_available(
-        self->texture_registrar, FL_TEXTURE(self->texture_gl));
+    // Only swap and notify if rendering was actually performed
+    if (rendered) {
+      // Swap front and back buffers
+      texture_gl_swap_buffers(self->texture_gl);
+      
+      // Notify Flutter that a new frame is available
+      fl_texture_registrar_mark_texture_frame_available(
+          self->texture_registrar, FL_TEXTURE(self->texture_gl));
+    }
   }
 }
