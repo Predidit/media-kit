@@ -74,12 +74,13 @@ struct _TextureGL {
   RenderBuffer buffers[NUM_BUFFERS];  // Triple buffer array
   std::atomic<int> display_index;  // Index of buffer Flutter is currently displaying
   std::atomic<int> ready_index;    // Index of the latest complete frame ready for display (-1 if none)
-  int write_index;                 // Index of buffer mpv is currently writing to
+  int write_index;                 // Index of buffer mpv is currently writing to (GL thread only)
   guint32 current_width;
   guint32 current_height;
   gboolean buffers_initialized;  // Flag to check if buffers are created
   gboolean initialization_posted;  // Flag to avoid duplicate initialization
-  GMutex swap_mutex;             // Mutex for buffer index swap synchronization
+  std::atomic<gboolean> resizing;  // Flag to indicate resize in progress
+  GMutex resize_mutex;            // Mutex for resize synchronization only
   VideoOutput* video_output;
 };
 
@@ -101,7 +102,8 @@ static void texture_gl_init(TextureGL* self) {
   self->current_height = 1;
   self->buffers_initialized = FALSE;
   self->initialization_posted = FALSE;
-  g_mutex_init(&self->swap_mutex);
+  self->resizing.store(FALSE);
+  g_mutex_init(&self->resize_mutex);
   self->video_output = NULL;
 }
 
@@ -161,7 +163,7 @@ static void texture_gl_dispose(GObject* object) {
     });
   }
   
-  g_mutex_clear(&self->swap_mutex);
+  g_mutex_clear(&self->resize_mutex);
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
@@ -203,10 +205,11 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   // Switch to mpv's isolated context
   eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
   
-  // Lock to prevent concurrent access during resize
-  g_mutex_lock(&self->swap_mutex);
+  // Mark as resizing and lock to prevent concurrent access
+  self->resizing.store(TRUE, std::memory_order_release);
+  g_mutex_lock(&self->resize_mutex);
   
-  // Free previous resources for both buffers
+  // Free previous resources for all buffers
   for (int i = 0; i < NUM_BUFFERS; i++) {
     RenderBuffer* buf = &self->buffers[i];
     
@@ -263,8 +266,8 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   glFlush();
   
   // Reset buffer indices for triple buffering
-  self->display_index.store(0);
-  self->ready_index.store(-1);  // No frame ready yet
+  self->display_index.store(0, std::memory_order_release);
+  self->ready_index.store(-1, std::memory_order_release);  // No frame ready yet
   self->write_index = 1;
   
   // Mark Flutter textures as invalid
@@ -277,7 +280,8 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   self->current_width = required_width;
   self->current_height = required_height;
   
-  g_mutex_unlock(&self->swap_mutex);
+  g_mutex_unlock(&self->resize_mutex);
+  self->resizing.store(FALSE, std::memory_order_release);
 }
 
 gboolean texture_gl_render(TextureGL* self) {
@@ -340,38 +344,27 @@ void texture_gl_swap_buffers(TextureGL* self) {
   // This is called from the GL render thread after rendering is complete
   // Triple buffering: write_index -> ready_index, find new write_index
   
-  g_mutex_lock(&self->swap_mutex);
-  
   int write_idx = self->write_index;
-  int display_idx = self->display_index.load();
-  int old_ready_idx = self->ready_index.load();
+  int display_idx = self->display_index.load(std::memory_order_acquire);
+  int old_ready_idx = self->ready_index.load(std::memory_order_acquire);
   
   // The just-rendered buffer becomes the new ready buffer
-  self->ready_index.store(write_idx);
+  self->ready_index.store(write_idx, std::memory_order_release);
   
   // Find a new write buffer: must not be display or the new ready buffer
   // Prefer the old ready buffer if available (it's safe to overwrite)
   // Otherwise use any buffer that's not display
-  int new_write_idx = -1;
+  int new_write_idx;
   
   if (old_ready_idx >= 0 && old_ready_idx != display_idx) {
     // Reuse old ready buffer - Flutter hasn't picked it up yet, and new frame supersedes it
     new_write_idx = old_ready_idx;
   } else {
     // Find any buffer that's not display and not the new ready
-    for (int i = 0; i < NUM_BUFFERS; i++) {
-      if (i != display_idx && i != write_idx) {
-        new_write_idx = i;
-        break;
-      }
-    }
+    new_write_idx = 3 - display_idx - write_idx;
   }
   
-  if (new_write_idx >= 0) {
-    self->write_index = new_write_idx;
-  }
-  
-  g_mutex_unlock(&self->swap_mutex);
+  self->write_index = new_write_idx;
 }
 
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
@@ -396,11 +389,24 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
   }
   
-  // Lock to check and update buffer indices
-  g_mutex_lock(&self->swap_mutex);
+  // If resize is in progress, return dummy texture to avoid accessing invalid buffers
+  if (self->resizing.load(std::memory_order_acquire)) {
+    *target = GL_TEXTURE_2D;
+    static guint32 dummy_texture = 0;
+    if (dummy_texture == 0) {
+      glGenTextures(1, &dummy_texture);
+      glBindTexture(GL_TEXTURE_2D, dummy_texture);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    *name = dummy_texture;
+    *width = 1;
+    *height = 1;
+    return TRUE;
+  }
   
-  int display_idx = self->display_index.load();
-  int ready_idx = self->ready_index.load();
+  int ready_idx = self->ready_index.load(std::memory_order_acquire);
+  int display_idx = self->display_index.load(std::memory_order_acquire);
   
   // Check if there's a new ready buffer to switch to
   if (ready_idx >= 0 && ready_idx != display_idx) {
@@ -422,17 +428,15 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
     
     if (render_complete) {
-      // Switch to the new ready buffer
-      // The old display buffer becomes available for writing
-      self->display_index.store(ready_idx);
-      display_idx = ready_idx;
-      
-      // Clear ready_index since we've consumed it
-      self->ready_index.store(-1);
+      // Atomically claim the ready buffer as our display buffer
+      // Use CAS to avoid race with GL thread's swap_buffers
+      if (self->ready_index.compare_exchange_strong(ready_idx, -1, 
+                                                     std::memory_order_acq_rel)) {
+        self->display_index.store(ready_idx, std::memory_order_release);
+        display_idx = ready_idx;
+      }
     }
   }
-  
-  g_mutex_unlock(&self->swap_mutex);
   
   RenderBuffer* display_buf = &self->buffers[display_idx];
   
