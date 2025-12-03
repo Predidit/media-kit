@@ -13,8 +13,8 @@
 #include <epoxy/egl.h>
 #include <atomic>
 
-// Number of buffers for double buffering
-#define NUM_BUFFERS 2
+// Number of buffers for triple buffering
+#define NUM_BUFFERS 3
 
 // EGLImage extension function pointers
 typedef EGLImageKHR (*PFNEGLCREATEIMAGEKHRPROC)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list);
@@ -59,28 +59,27 @@ static void init_egl_extensions() {
   }
 }
 
-// Buffer structure for double buffering
+// Buffer structure for triple buffering
 typedef struct {
   guint32 fbo;              // FBO for mpv rendering
   guint32 texture;          // Texture attached to FBO
   EGLImageKHR egl_image;    // EGLImage for sharing between contexts
-  EGLSyncKHR render_sync;   // Sync created after mpv render completes (for Flutter to wait)
-  gboolean ready;           // Whether this buffer has valid content
-  std::atomic<gboolean> consumed;  // Whether Flutter has consumed this buffer (safe for mpv to reuse)
+  EGLSyncKHR render_sync;   // Sync created after mpv render completes
 } RenderBuffer;
 
 struct _TextureGL {
   FlTextureGL parent_instance;
   guint32 flutter_textures[NUM_BUFFERS];  // Flutter's textures, one per buffer
   gboolean flutter_textures_valid[NUM_BUFFERS];  // Whether Flutter textures are valid (need recreate after resize)
-  RenderBuffer buffers[NUM_BUFFERS];  // Double buffer array
-  std::atomic<int> front_index;  // Index of the front buffer (for Flutter to read)
-  int back_index;                // Index of the back buffer (for mpv to render)
+  RenderBuffer buffers[NUM_BUFFERS];  // Triple buffer array
+  std::atomic<int> display_index;  // Index of buffer Flutter is currently displaying
+  std::atomic<int> ready_index;    // Index of the latest complete frame ready for display (-1 if none)
+  int write_index;                 // Index of buffer mpv is currently writing to
   guint32 current_width;
   guint32 current_height;
   gboolean buffers_initialized;  // Flag to check if buffers are created
   gboolean initialization_posted;  // Flag to avoid duplicate initialization
-  GMutex swap_mutex;             // Mutex for buffer swap synchronization
+  GMutex swap_mutex;             // Mutex for buffer index swap synchronization
   VideoOutput* video_output;
 };
 
@@ -94,11 +93,10 @@ static void texture_gl_init(TextureGL* self) {
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
     self->buffers[i].render_sync = EGL_NO_SYNC_KHR;
-    self->buffers[i].ready = FALSE;
-    self->buffers[i].consumed.store(TRUE);
   }
-  self->front_index.store(0);
-  self->back_index = 1;
+  self->display_index.store(0);
+  self->ready_index.store(-1);  // No frame ready yet
+  self->write_index = 1;
   self->current_width = 1;
   self->current_height = 1;
   self->buffers_initialized = FALSE;
@@ -120,7 +118,7 @@ static void texture_gl_dispose(GObject* object) {
     }
   }
   
-  // Clean up double buffer resources in dedicated GL thread
+  // Clean up triple buffer resources in dedicated GL thread
   if (video_output != NULL && gl_thread != NULL) {
     gl_thread->PostAndWait([self, video_output]() {
       EGLDisplay egl_display = video_output_get_egl_display(video_output);
@@ -158,7 +156,6 @@ static void texture_gl_dispose(GObject* object) {
             glDeleteFramebuffers(1, &buf->fbo);
             buf->fbo = 0;
           }
-          buf->ready = FALSE;
         }
       }
     });
@@ -259,17 +256,16 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     
-    buf->ready = FALSE;
     buf->render_sync = EGL_NO_SYNC_KHR;
-    buf->consumed.store(TRUE);
   }
   
   // Flush to ensure textures are ready
   glFlush();
   
-  // Reset buffer indices
-  self->front_index.store(0);
-  self->back_index = 1;
+  // Reset buffer indices for triple buffering
+  self->display_index.store(0);
+  self->ready_index.store(-1);  // No frame ready yet
+  self->write_index = 1;
   
   // Mark Flutter textures as invalid
   for (int i = 0; i < NUM_BUFFERS; i++) {
@@ -294,26 +290,18 @@ gboolean texture_gl_render(TextureGL* self) {
     return FALSE;
   }
   
-  // Get back buffer for rendering
-  int back_idx = self->back_index;
-  RenderBuffer* back_buf = &self->buffers[back_idx];
+  // Get write buffer for rendering
+  int write_idx = self->write_index;
+  RenderBuffer* write_buf = &self->buffers[write_idx];
   
-  if (back_buf->fbo == 0) {
+  if (write_buf->fbo == 0) {
     return FALSE;
   }
   
-  // Check if back buffer has been consumed by Flutter (delayed one frame)
-  // This ensures Flutter has had at least one full frame to finish reading
-  if (!back_buf->consumed.load()) {
-    // Back buffer not yet consumed by Flutter, skip this frame
-    // The previous front buffer will continue to be displayed
-    return FALSE;
-  }
-  
-  // Destroy old render_sync if exists (from previous render cycle)
-  if (back_buf->render_sync != EGL_NO_SYNC_KHR) {
-    _eglDestroySyncKHR(egl_display, back_buf->render_sync);
-    back_buf->render_sync = EGL_NO_SYNC_KHR;
+  // Destroy old render_sync if exists (from previous render cycle on this buffer)
+  if (write_buf->render_sync != EGL_NO_SYNC_KHR) {
+    _eglDestroySyncKHR(egl_display, write_buf->render_sync);
+    write_buf->render_sync = EGL_NO_SYNC_KHR;
   }
   
   gint32 required_width = self->current_width;
@@ -322,11 +310,11 @@ gboolean texture_gl_render(TextureGL* self) {
   // Switch to mpv's isolated context for rendering
   eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
   
-  // Bind back buffer's FBO
-  glBindFramebuffer(GL_FRAMEBUFFER, back_buf->fbo);
+  // Bind write buffer's FBO
+  glBindFramebuffer(GL_FRAMEBUFFER, write_buf->fbo);
   
-  // Render mpv frame to back buffer's texture
-  mpv_opengl_fbo fbo{(gint32)back_buf->fbo, required_width, required_height, 0};
+  // Render mpv frame to write buffer's texture
+  mpv_opengl_fbo fbo{(gint32)write_buf->fbo, required_width, required_height, 0};
   int flip_y = 0;
   mpv_render_param params[] = {
       {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
@@ -343,38 +331,44 @@ gboolean texture_gl_render(TextureGL* self) {
   
   // Create sync fence to mark render completion
   // Flutter will check this sync before reading to ensure rendering is done
-  back_buf->render_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
-  
-  // Mark back buffer as ready
-  back_buf->ready = TRUE;
+  write_buf->render_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
   
   return TRUE;
 }
 
 void texture_gl_swap_buffers(TextureGL* self) {
   // This is called from the GL render thread after rendering is complete
+  // Triple buffering: write_index -> ready_index, find new write_index
   
   g_mutex_lock(&self->swap_mutex);
   
-  int back_idx = self->back_index;
-  RenderBuffer* back_buf = &self->buffers[back_idx];
+  int write_idx = self->write_index;
+  int display_idx = self->display_index.load();
+  int old_ready_idx = self->ready_index.load();
   
-  // Only swap if back buffer has valid content
-  if (back_buf->ready) {
-    // Swap front and back indices
-    int old_front = self->front_index.load();
-    self->front_index.store(back_idx);
-    self->back_index = old_front;
-    
-    // The old front buffer is now the new back buffer
-    // Mark it as consumed (Flutter has had one full frame to read it)
-    // and reset its ready state
-    self->buffers[old_front].consumed.store(TRUE);
-    self->buffers[old_front].ready = FALSE;
-    
-    // Mark the new front buffer as not consumed yet
-    // (Flutter will start reading it now)
-    back_buf->consumed.store(FALSE);
+  // The just-rendered buffer becomes the new ready buffer
+  self->ready_index.store(write_idx);
+  
+  // Find a new write buffer: must not be display or the new ready buffer
+  // Prefer the old ready buffer if available (it's safe to overwrite)
+  // Otherwise use any buffer that's not display
+  int new_write_idx = -1;
+  
+  if (old_ready_idx >= 0 && old_ready_idx != display_idx) {
+    // Reuse old ready buffer - Flutter hasn't picked it up yet, and new frame supersedes it
+    new_write_idx = old_ready_idx;
+  } else {
+    // Find any buffer that's not display and not the new ready
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      if (i != display_idx && i != write_idx) {
+        new_write_idx = i;
+        break;
+      }
+    }
+  }
+  
+  if (new_write_idx >= 0) {
+    self->write_index = new_write_idx;
   }
   
   g_mutex_unlock(&self->swap_mutex);
@@ -402,81 +396,75 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
   }
   
-  // Lock to ensure consistent buffer index read
+  // Lock to check and update buffer indices
   g_mutex_lock(&self->swap_mutex);
   
-  // Get current front buffer index
-  int front_idx = self->front_index.load();
-  RenderBuffer* front_buf = &self->buffers[front_idx];
+  int display_idx = self->display_index.load();
+  int ready_idx = self->ready_index.load();
   
-  // Check if the front buffer's render is complete
-  // If not complete, we continue using the current texture (previous frame)
-  if (front_buf->render_sync != EGL_NO_SYNC_KHR) {
-    EGLint result = _eglClientWaitSyncKHR(egl_display, front_buf->render_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
-    if (result == EGL_TIMEOUT_EXPIRED_KHR) {
-      // Render not complete yet - keep using current texture, don't update
-      // This avoids reading an incomplete frame
-      
-      g_mutex_unlock(&self->swap_mutex);
-      
-      // Return current valid texture or dummy
-      *target = GL_TEXTURE_2D;
-      if (self->flutter_textures_valid[front_idx] && self->flutter_textures[front_idx] != 0) {
-        *name = self->flutter_textures[front_idx];
-        *width = self->current_width;
-        *height = self->current_height;
+  // Check if there's a new ready buffer to switch to
+  if (ready_idx >= 0 && ready_idx != display_idx) {
+    RenderBuffer* ready_buf = &self->buffers[ready_idx];
+    
+    // Check if the ready buffer's render is complete (non-blocking)
+    gboolean render_complete = TRUE;
+    if (ready_buf->render_sync != EGL_NO_SYNC_KHR) {
+      EGLint result = _eglClientWaitSyncKHR(egl_display, ready_buf->render_sync, 
+                                            EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0);
+      if (result == EGL_TIMEOUT_EXPIRED_KHR) {
+        // Render not complete yet - don't switch, continue with current display buffer
+        render_complete = FALSE;
       } else {
-        // Use dummy texture
-        static guint32 dummy_texture = 0;
-        if (dummy_texture == 0) {
-          glGenTextures(1, &dummy_texture);
-          glBindTexture(GL_TEXTURE_2D, dummy_texture);
-          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-          glBindTexture(GL_TEXTURE_2D, 0);
-        }
-        *name = dummy_texture;
-        *width = 1;
-        *height = 1;
+        // Render complete, destroy the sync
+        _eglDestroySyncKHR(egl_display, ready_buf->render_sync);
+        ready_buf->render_sync = EGL_NO_SYNC_KHR;
       }
-      return TRUE;
     }
-    // Render complete, destroy the sync
-    _eglDestroySyncKHR(egl_display, front_buf->render_sync);
-    front_buf->render_sync = EGL_NO_SYNC_KHR;
+    
+    if (render_complete) {
+      // Switch to the new ready buffer
+      // The old display buffer becomes available for writing
+      self->display_index.store(ready_idx);
+      display_idx = ready_idx;
+      
+      // Clear ready_index since we've consumed it
+      self->ready_index.store(-1);
+    }
   }
   
   g_mutex_unlock(&self->swap_mutex);
   
+  RenderBuffer* display_buf = &self->buffers[display_idx];
+  
   // Check if we need to create/recreate Flutter texture for this buffer
-  if (!self->flutter_textures_valid[front_idx] && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+  if (!self->flutter_textures_valid[display_idx] && display_buf->egl_image != EGL_NO_IMAGE_KHR) {
     // Delete old texture if exists
-    if (self->flutter_textures[front_idx] != 0) {
-      glDeleteTextures(1, &self->flutter_textures[front_idx]);
+    if (self->flutter_textures[display_idx] != 0) {
+      glDeleteTextures(1, &self->flutter_textures[display_idx]);
     }
     
     // Create Flutter's texture from this buffer's EGLImage
-    glGenTextures(1, &self->flutter_textures[front_idx]);
-    glBindTexture(GL_TEXTURE_2D, self->flutter_textures[front_idx]);
+    glGenTextures(1, &self->flutter_textures[display_idx]);
+    glBindTexture(GL_TEXTURE_2D, self->flutter_textures[display_idx]);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, front_buf->egl_image);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, display_buf->egl_image);
     glBindTexture(GL_TEXTURE_2D, 0);
     
-    self->flutter_textures_valid[front_idx] = TRUE;
+    self->flutter_textures_valid[display_idx] = TRUE;
     
     // Notify Flutter about texture availability
     video_output_notify_texture_update(video_output);
   }
   
-  
   *target = GL_TEXTURE_2D;
-  *name = self->flutter_textures[front_idx];
+  *name = self->flutter_textures[display_idx];
   *width = self->current_width;
   *height = self->current_height;
   
-  if (!self->flutter_textures_valid[front_idx] || self->flutter_textures[front_idx] == 0) {
+  if (!self->flutter_textures_valid[display_idx] || self->flutter_textures[display_idx] == 0) {
     // First frame not yet available - create dummy texture
     static guint32 dummy_texture = 0;
     if (dummy_texture == 0) {
