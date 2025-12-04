@@ -59,12 +59,13 @@ static void init_egl_extensions() {
   }
 }
 
-// Buffer structure for triple buffering
+// Buffer structure for triple buffering with sequence numbers
 typedef struct {
   guint32 fbo;              // FBO for mpv rendering
   guint32 texture;          // Texture attached to FBO
   EGLImageKHR egl_image;    // EGLImage for sharing between contexts
   EGLSyncKHR render_sync;   // Sync created after mpv render completes
+  std::atomic<guint64> seq; // Sequence number of the frame in this buffer (0 = empty)
 } RenderBuffer;
 
 struct _TextureGL {
@@ -72,9 +73,10 @@ struct _TextureGL {
   guint32 flutter_textures[NUM_BUFFERS];  // Flutter's textures, one per buffer
   gboolean flutter_textures_valid[NUM_BUFFERS];  // Whether Flutter textures are valid (need recreate after resize)
   RenderBuffer buffers[NUM_BUFFERS];  // Triple buffer array
-  std::atomic<int> display_index;  // Index of buffer Flutter is currently displaying
-  std::atomic<int> ready_index;    // Index of the latest complete frame ready for display (-1 if none)
-  int write_index;                 // Index of buffer mpv is currently writing to (GL thread only)
+  std::atomic<guint64> producer_seq;  // Next sequence number to assign (producer side)
+  std::atomic<guint64> display_seq;   // Seq of buffer currently being displayed (protects from producer overwrite)
+  guint64 consumer_seq;               // Last consumed sequence number (consumer side, main thread only)
+  int write_index;                    // Index of buffer mpv is currently writing to (GL thread only)
   guint32 current_width;
   guint32 current_height;
   gboolean buffers_initialized;  // Flag to check if buffers are created
@@ -94,10 +96,12 @@ static void texture_gl_init(TextureGL* self) {
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
     self->buffers[i].render_sync = EGL_NO_SYNC_KHR;
+    self->buffers[i].seq.store(0);  // 0 means empty/no frame
   }
-  self->display_index.store(0);
-  self->ready_index.store(-1);  // No frame ready yet
-  self->write_index = 1;
+  self->producer_seq.store(1);  // Start from 1 (0 means empty)
+  self->display_seq.store(0);   // No buffer being displayed yet
+  self->consumer_seq = 0;       // Consumer hasn't seen any frame yet
+  self->write_index = 0;
   self->current_width = 1;
   self->current_height = 1;
   self->buffers_initialized = FALSE;
@@ -265,10 +269,14 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   // Flush to ensure textures are ready
   glFlush();
   
-  // Reset buffer indices for triple buffering
-  self->display_index.store(0, std::memory_order_release);
-  self->ready_index.store(-1, std::memory_order_release);  // No frame ready yet
-  self->write_index = 1;
+  // Reset sequence numbers for triple buffering
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    self->buffers[i].seq.store(0, std::memory_order_release);  // Mark all buffers as empty
+  }
+  self->producer_seq.store(1, std::memory_order_release);  // Reset producer sequence
+  self->display_seq.store(0, std::memory_order_release);   // Reset display sequence
+  self->consumer_seq = 0;  // Reset consumer sequence
+  self->write_index = 0;
   
   // Mark Flutter textures as invalid
   for (int i = 0; i < NUM_BUFFERS; i++) {
@@ -284,6 +292,42 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   self->resizing.store(FALSE, std::memory_order_release);
 }
 
+// Helper function to select the best write buffer based on current state
+static int select_write_buffer(TextureGL* self) {
+  guint64 current_display_seq = self->display_seq.load(std::memory_order_acquire);
+  int best_idx = -1;
+  guint64 min_seq = UINT64_MAX;
+  
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
+    // Skip the buffer currently being displayed by consumer
+    if (buf_seq == current_display_seq && current_display_seq != 0) continue;
+    if (buf_seq < min_seq) {
+      min_seq = buf_seq;
+      best_idx = i;
+    }
+  }
+  
+  // Fallback: if no suitable buffer found, pick the oldest buffer
+  if (best_idx == -1) {
+    min_seq = UINT64_MAX;
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
+      if (buf_seq < min_seq) {
+        min_seq = buf_seq;
+        best_idx = i;
+      }
+    }
+  }
+  
+  // Last resort fallback
+  if (best_idx == -1) {
+    best_idx = 0;
+  }
+  
+  return best_idx;
+}
+
 gboolean texture_gl_render(TextureGL* self) {
   VideoOutput* video_output = self->video_output;
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
@@ -294,8 +338,10 @@ gboolean texture_gl_render(TextureGL* self) {
     return FALSE;
   }
   
-  // Get write buffer for rendering
-  int write_idx = self->write_index;
+  // Select the best write buffer based on current display_seq
+  // This ensures we always pick a buffer that's not being displayed
+  int write_idx = select_write_buffer(self);
+  self->write_index = write_idx;
   RenderBuffer* write_buf = &self->buffers[write_idx];
   
   if (write_buf->fbo == 0) {
@@ -342,24 +388,17 @@ gboolean texture_gl_render(TextureGL* self) {
 
 void texture_gl_swap_buffers(TextureGL* self) {
   // This is called from the GL render thread after rendering is complete
-  // Triple buffering: write_index -> ready_index, find new write_index
-  //
-  // Buffer states:
-  // - display: currently being shown by Flutter (cannot write)
-  // - ready: waiting for Flutter to pick up (will be overwritten by new ready)
-  // - write: just finished rendering, will become new ready
+  // Assign sequence number to the just-rendered buffer to mark it as complete
+  // The next write buffer will be selected in texture_gl_render before the next frame
   
   int write_idx = self->write_index;
-  int display_idx = self->display_index.load(std::memory_order_acquire);
   
-  // The just-rendered buffer becomes the new ready buffer
-  self->ready_index.store(write_idx, std::memory_order_release);
+  // Assign sequence number to the just-rendered buffer and increment
+  guint64 current_seq = self->producer_seq.fetch_add(1, std::memory_order_acq_rel);
+  self->buffers[write_idx].seq.store(current_seq, std::memory_order_release);
   
-  // Find the third buffer (neither display nor the new ready)
-  // With 3 buffers indexed 0,1,2: third = 3 - a - b (when a != b)
-  int new_write_idx = 3 - display_idx - write_idx;
-  
-  self->write_index = new_write_idx;
+  // Note: write_index will be updated in texture_gl_render() before the next frame
+  // This ensures we always select based on the latest display_seq
 }
 
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
@@ -400,32 +439,65 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     return TRUE;
   }
   
-  int ready_idx = self->ready_index.load(std::memory_order_acquire);
-  int display_idx = self->display_index.load(std::memory_order_acquire);
+  // Find the buffer with the highest seq that is greater than consumer_seq
+  // This implements proper consumer sampling - only switch when there's a newer frame
+  int best_idx = -1;
+  guint64 best_seq = self->consumer_seq;
   
-  // Check if there's a new ready buffer to switch to
-  if (ready_idx >= 0 && ready_idx != display_idx) {
-    RenderBuffer* ready_buf = &self->buffers[ready_idx];
-    
-    // Check if the ready buffer's render is complete (non-blocking)
-    gboolean render_complete = TRUE;
-    if (ready_buf->render_sync != EGL_NO_SYNC_KHR) {
-      EGLint result = _eglClientWaitSyncKHR(egl_display, ready_buf->render_sync, 
-                                            0, 0);
-      if (result == EGL_TIMEOUT_EXPIRED_KHR) {
-        // Render not complete yet - don't switch, continue with current display buffer
-        render_complete = FALSE;
-      } else {
-        // Render complete, destroy the sync
-        _eglDestroySyncKHR(egl_display, ready_buf->render_sync);
-        ready_buf->render_sync = EGL_NO_SYNC_KHR;
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
+    if (buf_seq > best_seq) {
+      RenderBuffer* buf = &self->buffers[i];
+      
+      // Check if rendering is complete for this buffer (non-blocking)
+      gboolean render_complete = TRUE;
+      if (buf->render_sync != EGL_NO_SYNC_KHR) {
+        EGLint result = _eglClientWaitSyncKHR(egl_display, buf->render_sync, 0, 0);
+        if (result == EGL_TIMEOUT_EXPIRED_KHR) {
+          // Render not complete yet - skip this buffer
+          render_complete = FALSE;
+        } else {
+          // Render complete, destroy the sync
+          _eglDestroySyncKHR(egl_display, buf->render_sync);
+          buf->render_sync = EGL_NO_SYNC_KHR;
+        }
+      }
+      
+      if (render_complete) {
+        best_seq = buf_seq;
+        best_idx = i;
       }
     }
-    
-    if (render_complete) {
-      self->display_index.store(ready_idx, std::memory_order_release);
-      display_idx = ready_idx;
+  }
+  
+  // If we found a newer frame, update consumer_seq
+  if (best_idx >= 0) {
+    self->consumer_seq = best_seq;
+  }
+  
+  // Determine display index: use best_idx if found, otherwise find any valid buffer
+  int display_idx = best_idx;
+  if (display_idx < 0) {
+    // No new frame, find the buffer with highest seq (the most recent frame we've seen)
+    guint64 max_seq = 0;
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+      guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
+      if (buf_seq > max_seq) {
+        max_seq = buf_seq;
+        display_idx = i;
+      }
     }
+  }
+  
+  // If still no valid buffer (no frames rendered yet), use buffer 0
+  if (display_idx < 0) {
+    display_idx = 0;
+  }
+  
+  // Update display_seq to protect this buffer from being overwritten by producer
+  guint64 selected_seq = self->buffers[display_idx].seq.load(std::memory_order_acquire);
+  if (selected_seq > 0) {
+    self->display_seq.store(selected_seq, std::memory_order_release);
   }
   
   RenderBuffer* display_buf = &self->buffers[display_idx];
