@@ -246,7 +246,7 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
                     self->current_height != (guint32)required_height;
   
   if (!first_frame && !resize) {
-    return;  // No resize needed
+    return;
   }
   
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
