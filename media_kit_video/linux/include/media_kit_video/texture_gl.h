@@ -24,25 +24,27 @@ TextureGL* texture_gl_new(VideoOutput* video_output);
 
 /**
  * @brief Checks if texture needs resize and performs it if necessary.
- * This manages double buffering - creates/resizes both front and back buffers.
+ * This manages the mailbox triple buffering - creates/resizes all three buffers.
  */
 void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 required_height);
 
 /**
- * @brief Renders mpv frame to the back buffer (called from dedicated thread).
- * Uses EGLSync for synchronization instead of glFinish.
+ * @brief Renders mpv frame to the back buffer (called from dedicated GL thread).
+ * Uses mailbox model: renders to back buffer, then swaps with mailbox atomically.
  * @return TRUE if rendering was performed, FALSE if skipped.
  */
 gboolean texture_gl_render(TextureGL* self);
 
 /**
- * @brief Swaps front and back buffers after rendering is complete.
+ * @brief Publishes the rendered frame using mailbox swap.
+ * Atomically swaps back buffer with mailbox, old mailbox content becomes new back buffer.
  * Called from dedicated GL thread after render finishes.
  */
 void texture_gl_swap_buffers(TextureGL* self);
 
 /**
- * @brief Populates texture with video frame from the current front buffer.
+ * @brief Populates texture with video frame using mailbox model.
+ * Atomically swaps front buffer with mailbox to get the latest frame.
  */
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
                                      guint32* target,
