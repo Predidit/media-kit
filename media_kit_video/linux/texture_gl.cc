@@ -13,7 +13,7 @@
 #include <epoxy/egl.h>
 #include <atomic>
 
-// Number of buffers for triple buffering
+// Number of buffers for mailbox triple buffering
 #define NUM_BUFFERS 3
 
 // EGLImage extension function pointers
@@ -25,6 +25,7 @@ typedef void (*PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)(GLenum target, GLeglImageOES
 typedef EGLSyncKHR (*PFNEGLCREATESYNCKHRPROC)(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
 typedef EGLBoolean (*PFNEGLDESTROYSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync);
 typedef EGLint (*PFNEGLCLIENTWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
+typedef EGLint (*PFNEGLWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
 
 // Define the extension functions
 #ifndef eglCreateImageKHR
@@ -41,6 +42,7 @@ static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = NULL;
 static PFNEGLCREATESYNCKHRPROC _eglCreateSyncKHR = NULL;
 static PFNEGLDESTROYSYNCKHRPROC _eglDestroySyncKHR = NULL;
 static PFNEGLCLIENTWAITSYNCKHRPROC _eglClientWaitSyncKHR = NULL;
+static PFNEGLWAITSYNCKHRPROC _eglWaitSyncKHR = NULL;
 
 static void init_egl_extensions() {
   static gboolean initialized = FALSE;
@@ -54,35 +56,75 @@ static void init_egl_extensions() {
     _eglCreateSyncKHR = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
     _eglDestroySyncKHR = (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
     _eglClientWaitSyncKHR = (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
+    _eglWaitSyncKHR = (PFNEGLWAITSYNCKHRPROC)eglGetProcAddress("eglWaitSyncKHR");
     
     initialized = TRUE;
   }
 }
 
-// Buffer structure for triple buffering with sequence numbers
+// Buffer structure for mailbox triple buffering
+// Each buffer has its own GPU resources
 typedef struct {
   guint32 fbo;              // FBO for mpv rendering
-  guint32 texture;          // Texture attached to FBO
+  guint32 texture;          // Texture attached to FBO (mpv side)
   EGLImageKHR egl_image;    // EGLImage for sharing between contexts
-  EGLSyncKHR render_sync;   // Sync created after mpv render completes
-  std::atomic<guint64> seq; // Sequence number of the frame in this buffer (0 = empty)
+  guint32 flutter_texture;  // Flutter's texture bound to EGLImage
+  gboolean flutter_texture_valid;  // Whether Flutter texture is valid
+  std::atomic<EGLSyncKHR> render_sync;  // Sync created after mpv render (atomic for cross-thread access)
 } RenderBuffer;
 
+/**
+ * Mailbox Triple Buffering Model with Drain-Only Consumer:
+ * 
+ * Three buffers with fixed roles that rotate via atomic pointer swaps:
+ * - back:    Producer (GL thread) renders to this buffer
+ * - mailbox: Holds the latest complete frame with dirty flag
+ * - front:   Consumer (Flutter main thread) reads from this buffer
+ * 
+ * Key design: mailbox_state combines index and dirty flag in ONE atomic:
+ *   mailbox_state = (dirty << 8) | index
+ * This eliminates race conditions between checking dirty and swapping.
+ * 
+ * Producer workflow (GL thread):
+ *   1. Render frame to back buffer
+ *   2. Atomic exchange: put (dirty=1, back_index) into mailbox, get old index
+ *   3. Old mailbox index becomes new back buffer
+ * 
+ * Consumer workflow (Flutter main thread) - DRAIN-ONLY:
+ *   1. Atomic CAS: if dirty=1, swap (dirty=0, front_index) with mailbox
+ *   2. If CAS succeeds: got new frame, update front_index
+ *   3. If dirty=0: no new frame, keep current front buffer
+ *   4. Display front buffer
+ * 
+ * Drain-only semantics ensures:
+ * - Consumer only swaps when mailbox has NEW content (dirty=1)
+ * - Consumer never puts its displayed frame back unless getting new one
+ * - Producer can always safely overwrite mailbox content
+ * - Single atomic operation prevents dirty/index race condition
+ */
 struct _TextureGL {
   FlTextureGL parent_instance;
-  guint32 flutter_textures[NUM_BUFFERS];  // Flutter's textures, one per buffer
-  gboolean flutter_textures_valid[NUM_BUFFERS];  // Whether Flutter textures are valid (need recreate after resize)
-  RenderBuffer buffers[NUM_BUFFERS];  // Triple buffer array
-  std::atomic<guint64> producer_seq;  // Next sequence number to assign (producer side)
-  std::atomic<guint64> display_seq;   // Seq of buffer currently being displayed (protects from producer overwrite)
-  guint64 consumer_seq;               // Last consumed sequence number (consumer side, main thread only)
-  int write_index;                    // Index of buffer mpv is currently writing to (GL thread only)
+  
+  // The three buffers for mailbox model
+  RenderBuffer buffers[NUM_BUFFERS];
+  
+  // Mailbox model: atomic indices for lock-free buffer swapping
+  // Producer (GL thread) owns back_index exclusively
+  // Consumer (main thread) owns front_index exclusively
+  // mailbox uses a combined atomic to avoid race between index and dirty flag
+  int back_index;                      // Producer's current buffer (GL thread only)
+  int front_index;                     // Consumer's current buffer (main thread only)
+  // Combined mailbox state: index in lower bits, dirty flag in upper bit
+  // This ensures atomic swap of both index and dirty flag together
+  // Encoding: (dirty << 8) | index, where dirty is 0 or 1, index is 0-2
+  std::atomic<int> mailbox_state;      // Combined: dirty flag (bit 8) + buffer index (bits 0-7)
+  
   guint32 current_width;
   guint32 current_height;
-  gboolean buffers_initialized;  // Flag to check if buffers are created
-  gboolean initialization_posted;  // Flag to avoid duplicate initialization
-  std::atomic<gboolean> resizing;  // Flag to indicate resize in progress
-  GMutex resize_mutex;            // Mutex for resize synchronization only
+  gboolean buffers_initialized;
+  gboolean initialization_posted;
+  std::atomic<gboolean> resizing;      // Flag to indicate resize in progress
+  
   VideoOutput* video_output;
 };
 
@@ -90,24 +132,26 @@ G_DEFINE_TYPE(TextureGL, texture_gl, fl_texture_gl_get_type())
 
 static void texture_gl_init(TextureGL* self) {
   for (int i = 0; i < NUM_BUFFERS; i++) {
-    self->flutter_textures[i] = 0;
-    self->flutter_textures_valid[i] = FALSE;
     self->buffers[i].fbo = 0;
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
-    self->buffers[i].render_sync = EGL_NO_SYNC_KHR;
-    self->buffers[i].seq.store(0);  // 0 means empty/no frame
+    self->buffers[i].flutter_texture = 0;
+    self->buffers[i].flutter_texture_valid = FALSE;
+    self->buffers[i].render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_relaxed);
   }
-  self->producer_seq.store(1);  // Start from 1 (0 means empty)
-  self->display_seq.store(0);   // No buffer being displayed yet
-  self->consumer_seq = 0;       // Consumer hasn't seen any frame yet
-  self->write_index = 0;
+  
+  // Initialize mailbox model indices
+  // back=0 for producer, front=1 for consumer, mailbox=2 initially (not dirty)
+  self->back_index = 0;
+  self->front_index = 1;
+  // mailbox_state = (dirty << 8) | index = (0 << 8) | 2 = 2
+  self->mailbox_state.store(2, std::memory_order_relaxed);
+  
   self->current_width = 1;
   self->current_height = 1;
   self->buffers_initialized = FALSE;
   self->initialization_posted = FALSE;
-  self->resizing.store(FALSE);
-  g_mutex_init(&self->resize_mutex);
+  self->resizing.store(FALSE, std::memory_order_relaxed);
   self->video_output = NULL;
 }
 
@@ -116,15 +160,15 @@ static void texture_gl_dispose(GObject* object) {
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
-  // Clean up Flutter's textures
+  // Clean up Flutter's textures (main thread)
   for (int i = 0; i < NUM_BUFFERS; i++) {
-    if (self->flutter_textures[i] != 0) {
-      glDeleteTextures(1, &self->flutter_textures[i]);
-      self->flutter_textures[i] = 0;
+    if (self->buffers[i].flutter_texture != 0) {
+      glDeleteTextures(1, &self->buffers[i].flutter_texture);
+      self->buffers[i].flutter_texture = 0;
     }
   }
   
-  // Clean up triple buffer resources in dedicated GL thread
+  // Clean up GPU resources in dedicated GL thread
   if (video_output != NULL && gl_thread != NULL) {
     gl_thread->PostAndWait([self, video_output]() {
       EGLDisplay egl_display = video_output_get_egl_display(video_output);
@@ -135,9 +179,10 @@ static void texture_gl_dispose(GObject* object) {
         RenderBuffer* buf = &self->buffers[i];
         
         // Clean up EGLSyncKHR
-        if (buf->render_sync != EGL_NO_SYNC_KHR) {
-          _eglDestroySyncKHR(egl_display, buf->render_sync);
-          buf->render_sync = EGL_NO_SYNC_KHR;
+        EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
+        if (sync != EGL_NO_SYNC_KHR) {
+          _eglDestroySyncKHR(egl_display, sync);
+          buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
         }
         
         // Clean up EGLImage
@@ -167,7 +212,6 @@ static void texture_gl_dispose(GObject* object) {
     });
   }
   
-  g_mutex_clear(&self->resize_mutex);
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
@@ -186,8 +230,10 @@ TextureGL* texture_gl_new(VideoOutput* video_output) {
   return self;
 }
 
-/// This function is called from the dedicated rendering thread
-/// So we can directly perform OpenGL operations
+/**
+ * Called from the dedicated GL rendering thread.
+ * Creates or resizes all three buffers for the mailbox model.
+ */
 void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 required_height) {
   VideoOutput* video_output = self->video_output;
   
@@ -209,20 +255,21 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
   // Switch to mpv's isolated context
   eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
   
-  // Mark as resizing and lock to prevent concurrent access
+  // Mark as resizing to prevent consumer from accessing buffers
   self->resizing.store(TRUE, std::memory_order_release);
-  g_mutex_lock(&self->resize_mutex);
   
   // Free previous resources for all buffers
   for (int i = 0; i < NUM_BUFFERS; i++) {
     RenderBuffer* buf = &self->buffers[i];
     
     if (!first_frame) {
-      // Wait for any pending sync before destroying resources
-      if (buf->render_sync != EGL_NO_SYNC_KHR) {
-        _eglClientWaitSyncKHR(egl_display, buf->render_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-        _eglDestroySyncKHR(egl_display, buf->render_sync);
-        buf->render_sync = EGL_NO_SYNC_KHR;
+      // Wait for any pending GPU work before destroying resources
+      EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
+      if (sync != EGL_NO_SYNC_KHR) {
+        _eglClientWaitSyncKHR(egl_display, sync, 
+                              EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
+        _eglDestroySyncKHR(egl_display, sync);
+        buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
       }
       
       if (buf->egl_image != EGL_NO_IMAGE_KHR) {
@@ -251,7 +298,7 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, buf->texture, 0);
     
-    // Create EGLImage from texture
+    // Create EGLImage from texture for sharing between contexts
     EGLint egl_image_attribs[] = { EGL_NONE };
     buf->egl_image = eglCreateImageKHR(
         egl_display,
@@ -263,99 +310,57 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     
-    buf->render_sync = EGL_NO_SYNC_KHR;
+    // Mark Flutter texture as invalid (needs recreation)
+    buf->flutter_texture_valid = FALSE;
+    buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
   }
   
   // Flush to ensure textures are ready
   glFlush();
   
-  // Reset sequence numbers for triple buffering
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    self->buffers[i].seq.store(0, std::memory_order_release);  // Mark all buffers as empty
-  }
-  self->producer_seq.store(1, std::memory_order_release);  // Reset producer sequence
-  self->display_seq.store(0, std::memory_order_release);   // Reset display sequence
-  self->consumer_seq = 0;  // Reset consumer sequence
-  self->write_index = 0;
-  
-  // Mark Flutter textures as invalid
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    self->flutter_textures_valid[i] = FALSE;
-  }
+  // Reset mailbox model indices
+  self->back_index = 0;
+  self->front_index = 1;
+  // mailbox_state = (dirty << 8) | index = (0 << 8) | 2 = 2
+  self->mailbox_state.store(2, std::memory_order_release);
   
   // Mark buffers as initialized and update dimensions
   self->buffers_initialized = TRUE;
   self->current_width = required_width;
   self->current_height = required_height;
   
-  g_mutex_unlock(&self->resize_mutex);
   self->resizing.store(FALSE, std::memory_order_release);
 }
 
-// Helper function to select the best write buffer based on current state
-// Returns the index of the buffer to write to, or -1 if no safe buffer available
-static int select_write_buffer(TextureGL* self) {
-  guint64 current_display_seq = self->display_seq.load(std::memory_order_acquire);
-  int best_idx = -1;
-  guint64 min_seq = UINT64_MAX;
-  
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-    // NEVER select the buffer currently being displayed by consumer
-    if (buf_seq == current_display_seq && current_display_seq != 0) continue;
-    if (buf_seq < min_seq) {
-      min_seq = buf_seq;
-      best_idx = i;
-    }
-  }
-  
-  // No fallback that ignores display_seq - we must protect the display buffer
-  // If best_idx is still -1, it means all non-display buffers have the same seq
-  // This can only happen with 3 buffers when display has one and other two are equal
-  // In this case, pick any buffer that's not the display buffer
-  if (best_idx == -1) {
-    for (int i = 0; i < NUM_BUFFERS; i++) {
-      guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-      if (buf_seq != current_display_seq || current_display_seq == 0) {
-        best_idx = i;
-        break;
-      }
-    }
-  }
-  
-  return best_idx;
-}
-
+/**
+ * Renders mpv frame to the back buffer.
+ * Called from the dedicated GL rendering thread.
+ */
 gboolean texture_gl_render(TextureGL* self) {
   VideoOutput* video_output = self->video_output;
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
   EGLContext egl_context = video_output_get_egl_context(video_output);
   mpv_render_context* render_context = video_output_get_render_context(video_output);
   
-  if (!render_context) {
+  if (!render_context || !self->buffers_initialized) {
     return FALSE;
   }
   
-  // Select the best write buffer based on current display_seq
-  // This ensures we always pick a buffer that's not being displayed
-  int write_idx = select_write_buffer(self);
+  // Get the back buffer (producer's exclusive buffer)
+  int back_idx = self->back_index;
+  RenderBuffer* back_buf = &self->buffers[back_idx];
   
-  // If no safe buffer available (shouldn't happen with 3 buffers), skip this frame
-  if (write_idx < 0) {
+  if (back_buf->fbo == 0) {
     return FALSE;
   }
   
-  self->write_index = write_idx;
-  RenderBuffer* write_buf = &self->buffers[write_idx];
-  
-  if (write_buf->fbo == 0) {
-    return FALSE;
-  }
-  
-  // Destroy old render_sync if exists (from previous render cycle on this buffer)
-  if (write_buf->render_sync != EGL_NO_SYNC_KHR) {
-    _eglDestroySyncKHR(egl_display, write_buf->render_sync);
-    write_buf->render_sync = EGL_NO_SYNC_KHR;
+  // Before reusing this buffer, wait for any previous render to complete
+  // This ensures GPU has finished with this buffer before we overwrite it
+  EGLSyncKHR old_sync = back_buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
+  if (old_sync != EGL_NO_SYNC_KHR) {
+    // Wait for previous GPU work to complete, then destroy the sync
+    _eglClientWaitSyncKHR(egl_display, old_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
+    _eglDestroySyncKHR(egl_display, old_sync);
   }
   
   gint32 required_width = self->current_width;
@@ -364,11 +369,11 @@ gboolean texture_gl_render(TextureGL* self) {
   // Switch to mpv's isolated context for rendering
   eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_context);
   
-  // Bind write buffer's FBO
-  glBindFramebuffer(GL_FRAMEBUFFER, write_buf->fbo);
+  // Bind back buffer's FBO
+  glBindFramebuffer(GL_FRAMEBUFFER, back_buf->fbo);
   
-  // Render mpv frame to write buffer's texture
-  mpv_opengl_fbo fbo{(gint32)write_buf->fbo, required_width, required_height, 0};
+  // Render mpv frame to back buffer's texture
+  mpv_opengl_fbo fbo{(gint32)back_buf->fbo, required_width, required_height, 0};
   int flip_y = 0;
   mpv_render_param params[] = {
       {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
@@ -384,27 +389,32 @@ gboolean texture_gl_render(TextureGL* self) {
   glFlush();
   
   // Create sync fence to mark render completion
-  // Flutter will check this sync before reading to ensure rendering is done
-  write_buf->render_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+  // Consumer will use this for GPU-side synchronization
+  EGLSyncKHR new_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+  back_buf->render_sync.store(new_sync, std::memory_order_release);
   
   return TRUE;
 }
 
+/**
+ * Publishes the rendered frame using mailbox swap.
+ * Atomically swaps back buffer with mailbox and sets dirty flag in ONE operation.
+ * Called from dedicated GL thread after render finishes.
+ */
 void texture_gl_swap_buffers(TextureGL* self) {
-  // This is called from the GL render thread after rendering is complete
-  // Assign sequence number to the just-rendered buffer to mark it as complete
-  // The next write buffer will be selected in texture_gl_render before the next frame
-  
-  int write_idx = self->write_index;
-  
-  // Assign sequence number to the just-rendered buffer and increment
-  guint64 current_seq = self->producer_seq.fetch_add(1, std::memory_order_acq_rel);
-  self->buffers[write_idx].seq.store(current_seq, std::memory_order_release);
-  
-  // Note: write_index will be updated in texture_gl_render() before the next frame
-  // This ensures we always select based on the latest display_seq
+  // Atomic swap with dirty flag set:
+  // We put our back_index into mailbox with dirty=1
+  // We get back the old mailbox index (ignore its dirty flag)
+  int new_state = (1 << 8) | self->back_index;  // dirty=1, index=back_index
+  int old_state = self->mailbox_state.exchange(new_state, std::memory_order_acq_rel);
+  // Extract just the index from old state (ignore dirty flag)
+  self->back_index = old_state & 0xFF;
 }
 
+/**
+ * Populates texture with video frame using mailbox model.
+ * Called from Flutter's main thread.
+ */
 gboolean texture_gl_populate_texture(FlTextureGL* texture,
                                      guint32* target,
                                      guint32* name,
@@ -416,7 +426,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
   
-  // Asynchronously trigger initialization on first call
+  // Trigger initialization on first call
   if (!self->initialization_posted && !self->buffers_initialized) {
     gint64 required_width = video_output_get_width(video_output);
     gint64 required_height = video_output_get_height(video_output);
@@ -427,7 +437,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     }
   }
   
-  // If resize is in progress, return dummy texture to avoid accessing invalid buffers
+  // If resize is in progress, return dummy texture
   if (self->resizing.load(std::memory_order_acquire)) {
     *target = GL_TEXTURE_2D;
     static guint32 dummy_texture = 0;
@@ -443,99 +453,74 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
     return TRUE;
   }
   
-  // Find the buffer with the highest seq that is greater than consumer_seq
-  // This implements proper consumer sampling - only switch when there's a newer frame
-  int best_idx = -1;
-  guint64 best_seq = self->consumer_seq;
-  
-  for (int i = 0; i < NUM_BUFFERS; i++) {
-    guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-    if (buf_seq > best_seq) {
-      RenderBuffer* buf = &self->buffers[i];
-      
-      // Check if rendering is complete for this buffer (non-blocking)
-      gboolean render_complete = TRUE;
-      if (buf->render_sync != EGL_NO_SYNC_KHR) {
-        EGLint result = _eglClientWaitSyncKHR(egl_display, buf->render_sync, 0, 0);
-        if (result == EGL_TIMEOUT_EXPIRED_KHR) {
-          // Render not complete yet - skip this buffer
-          render_complete = FALSE;
-        } else {
-          // Render complete, destroy the sync
-          _eglDestroySyncKHR(egl_display, buf->render_sync);
-          buf->render_sync = EGL_NO_SYNC_KHR;
-        }
-      }
-      
-      if (render_complete) {
-        best_seq = buf_seq;
-        best_idx = i;
-      }
+  // Drain-only consumer: only swap if mailbox has new content (dirty flag set)
+  // Use CAS loop to atomically check dirty and swap in one operation
+  int current_state = self->mailbox_state.load(std::memory_order_acquire);
+  while (current_state & 0x100) {  // Check dirty flag (bit 8)
+    // Mailbox has new frame - try to swap
+    // New state: dirty=0, index=our front_index
+    int new_state = self->front_index;  // dirty=0, index=front_index
+    if (self->mailbox_state.compare_exchange_weak(current_state, new_state,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {
+      // Swap succeeded - extract the index we got
+      self->front_index = current_state & 0xFF;
+      break;
     }
+    // CAS failed, current_state has been updated, retry
   }
+  // If dirty was not set, we keep using current front buffer
   
-  // If we found a newer frame, update consumer_seq
-  if (best_idx >= 0) {
-    self->consumer_seq = best_seq;
-  }
+  // front_index points to the frame we should display
+  int front_idx = self->front_index;
+  RenderBuffer* front_buf = &self->buffers[front_idx];
   
-  // Determine display index: use best_idx if found, otherwise find any valid buffer
-  int display_idx = best_idx;
-  if (display_idx < 0) {
-    // No new frame, find the buffer with highest seq (the most recent frame we've seen)
-    guint64 max_seq = 0;
-    for (int i = 0; i < NUM_BUFFERS; i++) {
-      guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-      if (buf_seq > max_seq) {
-        max_seq = buf_seq;
-        display_idx = i;
-      }
+  // GPU synchronization: ensure producer's rendering is complete before we use the texture
+  // Take ownership of the sync object atomically
+  EGLSyncKHR sync = front_buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
+  if (sync != EGL_NO_SYNC_KHR) {
+    // Use GPU-side wait for better performance (doesn't block CPU)
+    // This inserts a wait into Flutter's GL command stream
+    if (_eglWaitSyncKHR != NULL) {
+      _eglWaitSyncKHR(egl_display, sync, 0);
+    } else {
+      // Fallback to CPU wait if eglWaitSyncKHR not available
+      _eglClientWaitSyncKHR(egl_display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
     }
+    // Destroy the sync after use (we own it now)
+    _eglDestroySyncKHR(egl_display, sync);
   }
-  
-  // If still no valid buffer (no frames rendered yet), use buffer 0
-  if (display_idx < 0) {
-    display_idx = 0;
-  }
-  
-  // Update display_seq to protect this buffer from being overwritten by producer
-  guint64 selected_seq = self->buffers[display_idx].seq.load(std::memory_order_acquire);
-  if (selected_seq > 0) {
-    self->display_seq.store(selected_seq, std::memory_order_release);
-  }
-  
-  RenderBuffer* display_buf = &self->buffers[display_idx];
   
   // Check if we need to create/recreate Flutter texture for this buffer
-  if (!self->flutter_textures_valid[display_idx] && display_buf->egl_image != EGL_NO_IMAGE_KHR) {
+  if (!front_buf->flutter_texture_valid && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
     // Delete old texture if exists
-    if (self->flutter_textures[display_idx] != 0) {
-      glDeleteTextures(1, &self->flutter_textures[display_idx]);
+    if (front_buf->flutter_texture != 0) {
+      glDeleteTextures(1, &front_buf->flutter_texture);
     }
     
     // Create Flutter's texture from this buffer's EGLImage
-    glGenTextures(1, &self->flutter_textures[display_idx]);
-    glBindTexture(GL_TEXTURE_2D, self->flutter_textures[display_idx]);
+    glGenTextures(1, &front_buf->flutter_texture);
+    glBindTexture(GL_TEXTURE_2D, front_buf->flutter_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, display_buf->egl_image);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, front_buf->egl_image);
     glBindTexture(GL_TEXTURE_2D, 0);
     
-    self->flutter_textures_valid[display_idx] = TRUE;
+    front_buf->flutter_texture_valid = TRUE;
     
     // Notify Flutter about texture availability
     video_output_notify_texture_update(video_output);
   }
   
   *target = GL_TEXTURE_2D;
-  *name = self->flutter_textures[display_idx];
+  *name = front_buf->flutter_texture;
   *width = self->current_width;
   *height = self->current_height;
   
-  if (!self->flutter_textures_valid[display_idx] || self->flutter_textures[display_idx] == 0) {
-    // First frame not yet available - create dummy texture
+  // If texture is not valid yet, return dummy texture
+  if (!front_buf->flutter_texture_valid || front_buf->flutter_texture == 0) {
     static guint32 dummy_texture = 0;
     if (dummy_texture == 0) {
       glGenTextures(1, &dummy_texture);
