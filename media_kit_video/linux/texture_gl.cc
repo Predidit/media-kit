@@ -293,6 +293,7 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
 }
 
 // Helper function to select the best write buffer based on current state
+// Returns the index of the buffer to write to, or -1 if no safe buffer available
 static int select_write_buffer(TextureGL* self) {
   guint64 current_display_seq = self->display_seq.load(std::memory_order_acquire);
   int best_idx = -1;
@@ -300,7 +301,7 @@ static int select_write_buffer(TextureGL* self) {
   
   for (int i = 0; i < NUM_BUFFERS; i++) {
     guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-    // Skip the buffer currently being displayed by consumer
+    // NEVER select the buffer currently being displayed by consumer
     if (buf_seq == current_display_seq && current_display_seq != 0) continue;
     if (buf_seq < min_seq) {
       min_seq = buf_seq;
@@ -308,21 +309,18 @@ static int select_write_buffer(TextureGL* self) {
     }
   }
   
-  // Fallback: if no suitable buffer found, pick the oldest buffer
+  // No fallback that ignores display_seq - we must protect the display buffer
+  // If best_idx is still -1, it means all non-display buffers have the same seq
+  // This can only happen with 3 buffers when display has one and other two are equal
+  // In this case, pick any buffer that's not the display buffer
   if (best_idx == -1) {
-    min_seq = UINT64_MAX;
     for (int i = 0; i < NUM_BUFFERS; i++) {
       guint64 buf_seq = self->buffers[i].seq.load(std::memory_order_acquire);
-      if (buf_seq < min_seq) {
-        min_seq = buf_seq;
+      if (buf_seq != current_display_seq || current_display_seq == 0) {
         best_idx = i;
+        break;
       }
     }
-  }
-  
-  // Last resort fallback
-  if (best_idx == -1) {
-    best_idx = 0;
   }
   
   return best_idx;
@@ -341,6 +339,12 @@ gboolean texture_gl_render(TextureGL* self) {
   // Select the best write buffer based on current display_seq
   // This ensures we always pick a buffer that's not being displayed
   int write_idx = select_write_buffer(self);
+  
+  // If no safe buffer available (shouldn't happen with 3 buffers), skip this frame
+  if (write_idx < 0) {
+    return FALSE;
+  }
+  
   self->write_index = write_idx;
   RenderBuffer* write_buf = &self->buffers[write_idx];
   
