@@ -291,17 +291,15 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, required_width, required_height,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, required_width, required_height,
                  0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     
     // Attach texture to FBO
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, buf->texture, 0);
     
-    EGLint egl_image_attribs[] = { 
-        EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_LINEAR_KHR,
-        EGL_NONE 
-    };
+    // Create EGLImage from texture for sharing between contexts
+    EGLint egl_image_attribs[] = { EGL_NONE };
     buf->egl_image = eglCreateImageKHR(
         egl_display,
         egl_context,
