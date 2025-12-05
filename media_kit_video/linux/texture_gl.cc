@@ -17,8 +17,8 @@
 #define NUM_BUFFERS 3
 
 // EGLImage extension function pointers
-typedef EGLImageKHR (*PFNEGLCREATEIMAGEKHRPROC)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list);
-typedef EGLBoolean (*PFNEGLDESTROYIMAGEKHRPROC)(EGLDisplay dpy, EGLImageKHR image);
+// Note: eglCreateImage/eglDestroyImage are EGL 1.5 core functions (handled by epoxy)
+// glEGLImageTargetTexture2DOES is still an extension
 typedef void (*PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)(GLenum target, GLeglImageOES image);
 
 // EGL_KHR_fence_sync extension function pointers
@@ -28,12 +28,7 @@ typedef EGLint (*PFNEGLCLIENTWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, E
 typedef EGLint (*PFNEGLWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
 
 // Define the extension functions
-#ifndef eglCreateImageKHR
-static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = NULL;
-#endif
-#ifndef eglDestroyImageKHR
-static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = NULL;
-#endif
+// Note: eglCreateImage/eglDestroyImage are EGL 1.5 core functions, no need to load manually
 #ifndef glEGLImageTargetTexture2DOES
 static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = NULL;
 #endif
@@ -47,9 +42,7 @@ static PFNEGLWAITSYNCKHRPROC _eglWaitSyncKHR = NULL;
 static void init_egl_extensions() {
   static gboolean initialized = FALSE;
   if (!initialized) {
-    // EGLImage extensions
-    eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    // EGLImage target texture extension (eglCreateImage/eglDestroyImage are EGL 1.5 core)
     glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     
     // EGL_KHR_fence_sync extensions
@@ -67,7 +60,7 @@ static void init_egl_extensions() {
 typedef struct {
   guint32 fbo;              // FBO for mpv rendering
   guint32 texture;          // Texture attached to FBO (mpv side)
-  EGLImageKHR egl_image;    // EGLImage for sharing between contexts
+  EGLImage egl_image;       // EGLImage for sharing between contexts (EGL 1.5)
   guint32 flutter_texture;  // Flutter's texture bound to EGLImage
   gboolean flutter_texture_valid;  // Whether Flutter texture is valid
   std::atomic<EGLSyncKHR> render_sync;  // Sync created after mpv render (atomic for cross-thread access)
@@ -134,7 +127,7 @@ static void texture_gl_init(TextureGL* self) {
   for (int i = 0; i < NUM_BUFFERS; i++) {
     self->buffers[i].fbo = 0;
     self->buffers[i].texture = 0;
-    self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
+    self->buffers[i].egl_image = EGL_NO_IMAGE;
     self->buffers[i].flutter_texture = 0;
     self->buffers[i].flutter_texture_valid = FALSE;
     self->buffers[i].render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_relaxed);
@@ -186,9 +179,9 @@ static void texture_gl_dispose(GObject* object) {
         }
         
         // Clean up EGLImage
-        if (buf->egl_image != EGL_NO_IMAGE_KHR) {
-          eglDestroyImageKHR(egl_display, buf->egl_image);
-          buf->egl_image = EGL_NO_IMAGE_KHR;
+        if (buf->egl_image != EGL_NO_IMAGE) {
+          eglDestroyImage(egl_display, buf->egl_image);
+          buf->egl_image = EGL_NO_IMAGE;
         }
       }
       
@@ -272,9 +265,9 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
         buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
       }
       
-      if (buf->egl_image != EGL_NO_IMAGE_KHR) {
-        eglDestroyImageKHR(egl_display, buf->egl_image);
-        buf->egl_image = EGL_NO_IMAGE_KHR;
+      if (buf->egl_image != EGL_NO_IMAGE) {
+        eglDestroyImage(egl_display, buf->egl_image);
+        buf->egl_image = EGL_NO_IMAGE;
       }
       
       glDeleteTextures(1, &buf->texture);
@@ -299,11 +292,16 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
                            GL_TEXTURE_2D, buf->texture, 0);
     
     // Create EGLImage from texture for sharing between contexts
-    EGLint egl_image_attribs[] = { EGL_NONE };
-    buf->egl_image = eglCreateImageKHR(
+    // Use eglCreateImage (EGL 1.5+) with LINEAR colorspace to prevent
+    // implicit sRGB conversion on some drivers (e.g., newer NVIDIA)
+    EGLAttrib egl_image_attribs[] = { 
+        EGL_GL_COLORSPACE, EGL_GL_COLORSPACE_LINEAR,
+        EGL_NONE 
+    };
+    buf->egl_image = eglCreateImage(
         egl_display,
         egl_context,
-        EGL_GL_TEXTURE_2D_KHR,
+        EGL_GL_TEXTURE_2D,
         (EGLClientBuffer)(guintptr)buf->texture,
         egl_image_attribs);
     
@@ -492,7 +490,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   }
   
   // Check if we need to create/recreate Flutter texture for this buffer
-  if (!front_buf->flutter_texture_valid && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
+  if (!front_buf->flutter_texture_valid && front_buf->egl_image != EGL_NO_IMAGE) {
     // Delete old texture if exists
     if (front_buf->flutter_texture != 0) {
       glDeleteTextures(1, &front_buf->flutter_texture);
