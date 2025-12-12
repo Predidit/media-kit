@@ -34,14 +34,19 @@ struct _VideoOutput {
   TextureUpdateCallback texture_update_callback;
   gpointer texture_update_callback_context;
   FlTextureRegistrar* texture_registrar;
-  GLRenderThread* gl_render_thread;
+  GLRenderThread* gl_render_thread; /* Each VideoOutput owns its own rendering thread */
   gboolean destroyed;
+  gboolean cleanup_complete;
 };
 
 G_DEFINE_TYPE(VideoOutput, video_output, G_TYPE_OBJECT)
 
 static void video_output_dispose(GObject* object) {
   VideoOutput* self = VIDEO_OUTPUT(object);
+  
+  g_print("media_kit: VideoOutput: Dispose started (handle: %p)\n", self->handle);
+  
+  // Mark as destroyed to prevent new operations
   self->destroyed = TRUE;
   
   // Make sure that no more callbacks are invoked from mpv.
@@ -49,46 +54,69 @@ static void video_output_dispose(GObject* object) {
     mpv_render_context_set_update_callback(self->render_context, NULL, NULL);
   }
 
+  // Drain any in-flight GL tasks to avoid racing TextureGL/EGL teardown.
+  if (self->gl_render_thread != NULL) {
+    (void)self->gl_render_thread->PostAndWait([]() {});
+  }
+
   // H/W
   if (self->texture_gl) {
     fl_texture_registrar_unregister_texture(self->texture_registrar,
                                             FL_TEXTURE(self->texture_gl));
-    
-    // Clean up EGL resources in dedicated GL thread
-    if (self->render_context != NULL || self->egl_context != EGL_NO_CONTEXT) {
-      self->gl_render_thread->PostAndWait([self]() {
-        // Free mpv_render_context with our isolated EGL context
-        if (self->render_context != NULL) {
-          if (self->egl_context != EGL_NO_CONTEXT) {
-            eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, self->egl_context);
-          }
-          mpv_render_context_free(self->render_context);
-          self->render_context = NULL;
-        }
-        
-        // Clean up EGL context
-        if (self->egl_context != EGL_NO_CONTEXT) {
-          eglDestroyContext(self->egl_display, self->egl_context);
-          self->egl_context = EGL_NO_CONTEXT;
-        }
-      });
-    }
-    
     g_object_unref(self->texture_gl);
+    self->texture_gl = NULL;
+  }
+
+  if ((self->render_context != NULL || self->egl_context != EGL_NO_CONTEXT) &&
+      self->gl_render_thread != NULL) {
+    // Ensure teardown happens on the GL thread that owned the EGL context.
+    self->gl_render_thread->PostAndWait([self]() {
+      if (self->egl_context != EGL_NO_CONTEXT) {
+        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       self->egl_context);
+      }
+
+      if (self->render_context != NULL) {
+        mpv_render_context_free(self->render_context);
+        self->render_context = NULL;
+      }
+
+      if (self->egl_context != EGL_NO_CONTEXT) {
+        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
+        eglDestroyContext(self->egl_display, self->egl_context);
+        self->egl_context = EGL_NO_CONTEXT;
+      }
+    });
   }
   // S/W
   if (self->texture_sw) {
     fl_texture_registrar_unregister_texture(self->texture_registrar,
                                             FL_TEXTURE(self->texture_sw));
     g_free(self->pixel_buffer);
+    self->pixel_buffer = NULL;
     g_object_unref(self->texture_sw);
+    self->texture_sw = NULL;
     if (self->render_context != NULL) {
       mpv_render_context_free(self->render_context);
       self->render_context = NULL;
     }
   }
   
+  // Destroy the dedicated GL render thread for this VideoOutput
+  // This MUST happen after all GL operations are complete
+  if (self->gl_render_thread != NULL) {
+    g_print("media_kit: VideoOutput: Destroying GL render thread\n");
+    delete self->gl_render_thread;
+    self->gl_render_thread = NULL;
+    g_print("media_kit: VideoOutput: GL render thread destroyed\n");
+  }
+  
   g_mutex_clear(&self->mutex);
+  self->cleanup_complete = TRUE;
+  
+  g_print("media_kit: VideoOutput: Dispose completed (handle: %p)\n", self->handle);
+  
   G_OBJECT_CLASS(video_output_parent_class)->dispose(object);
 }
 
@@ -114,17 +142,21 @@ static void video_output_init(VideoOutput* self) {
   self->texture_registrar = NULL;
   self->gl_render_thread = NULL;
   self->destroyed = FALSE;
+  self->cleanup_complete = FALSE;
   g_mutex_init(&self->mutex);
 }
 
 VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                               FlView* view,
                               gint64 handle,
-                              VideoOutputConfiguration configuration,
-                              GLRenderThread* gl_render_thread) {
+                              VideoOutputConfiguration configuration) {
   VideoOutput* self = VIDEO_OUTPUT(g_object_new(video_output_get_type(), NULL));
   self->texture_registrar = texture_registrar;
-  self->gl_render_thread = gl_render_thread;
+
+  // Create a dedicated GL render thread for this VideoOutput instance.
+  // We create it upfront so init/teardown always run on the same thread.
+  self->gl_render_thread = new GLRenderThread();
+  
   self->handle = (mpv_handle*)handle;
   self->width = configuration.width;
   self->height = configuration.height;
@@ -182,7 +214,7 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
   }
   
   // Initialize mpv in dedicated GL render thread
-  gl_render_thread->PostAndWait([self, &hardware_acceleration_supported]() {
+  self->gl_render_thread->PostAndWait([self, &hardware_acceleration_supported]() {
     mpv_set_option_string(self->handle, "video-sync", "audio");
     // Causes frame drops with `pulse` audio output. (SlotSun/dart_simple_live#42)
     // mpv_set_option_string(self->handle, "video-timing-offset", "0");
@@ -521,7 +553,10 @@ void video_output_notify_render(VideoOutput* self) {
     return;
   }
   // Post combined check_and_resize + render task to GL thread (asynchronously)
-  self->gl_render_thread->Post([self]() {
+  (void)self->gl_render_thread->Post([self]() {
+    if (self->destroyed) {
+      return;
+    }
     video_output_check_and_resize(self);
     video_output_render(self);
   });

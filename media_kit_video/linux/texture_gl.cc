@@ -160,17 +160,24 @@ static void texture_gl_dispose(GObject* object) {
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
+  g_print("media_kit: TextureGL: Dispose started\n");
+  
   // Clean up Flutter's textures (main thread)
   for (int i = 0; i < NUM_BUFFERS; i++) {
     if (self->buffers[i].flutter_texture != 0) {
+      g_print("media_kit: TextureGL: Deleting Flutter texture %u for buffer %d\n", 
+              self->buffers[i].flutter_texture, i);
       glDeleteTextures(1, &self->buffers[i].flutter_texture);
       self->buffers[i].flutter_texture = 0;
+      self->buffers[i].flutter_texture_valid = FALSE;
     }
   }
   
   // Clean up GPU resources in dedicated GL thread
   if (video_output != NULL && gl_thread != NULL) {
-    gl_thread->PostAndWait([self, video_output]() {
+    (void)gl_thread->PostAndWait([self, video_output]() {
+      g_print("media_kit: TextureGL: Cleaning up GPU resources\n");
+      
       EGLDisplay egl_display = video_output_get_egl_display(video_output);
       EGLContext egl_context = video_output_get_egl_context(video_output);
       
@@ -179,14 +186,14 @@ static void texture_gl_dispose(GObject* object) {
         RenderBuffer* buf = &self->buffers[i];
         
         // Clean up EGLSyncKHR
-        EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
+        EGLSyncKHR sync = buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
         if (sync != EGL_NO_SYNC_KHR) {
           _eglDestroySyncKHR(egl_display, sync);
-          buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
         }
         
         // Clean up EGLImage
         if (buf->egl_image != EGL_NO_IMAGE_KHR) {
+          g_print("media_kit: TextureGL: Destroying EGLImage for buffer %d\n", i);
           eglDestroyImageKHR(egl_display, buf->egl_image);
           buf->egl_image = EGL_NO_IMAGE_KHR;
         }
@@ -208,13 +215,22 @@ static void texture_gl_dispose(GObject* object) {
             buf->fbo = 0;
           }
         }
+        
+        eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
       }
+      
+      g_print("media_kit: TextureGL: GPU resources cleanup completed\n");
     });
+  } else {
+    g_printerr("media_kit: TextureGL: Warning - GL thread not available, skipping GPU cleanup\n");
   }
   
   self->current_width = 1;
   self->current_height = 1;
   self->video_output = NULL;
+  
+  g_print("media_kit: TextureGL: Dispose completed\n");
+  
   G_OBJECT_CLASS(texture_gl_parent_class)->dispose(object);
 }
 
