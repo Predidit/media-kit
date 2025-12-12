@@ -12,7 +12,6 @@
  
 GLRenderThread::GLRenderThread() : stop_(false), running_(false) {
   thread_ = std::thread([this]() { Run(); });
-  // Best-effort: bump priority if permitted (failure is fine).
   pthread_t thread_handle = thread_.native_handle();
   struct sched_param params;
   params.sched_priority = sched_get_priority_max(SCHED_OTHER);
@@ -97,7 +96,7 @@ void GLRenderThread::Run() {
   }
   cv_.notify_all();
   
-  // Main loop: process tasks until shutdown requested
+  // Main loop
   while (true) {
     std::function<void()> task;
     
