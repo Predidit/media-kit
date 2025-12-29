@@ -534,6 +534,7 @@ class PlayerConfiguration {
       'data',
       'file',
       'http',
+      'httpproxy'
       'https',
       'crypto',
     ],
