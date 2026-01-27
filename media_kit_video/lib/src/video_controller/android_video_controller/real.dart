@@ -148,7 +148,7 @@ class AndroidVideoController extends PlatformVideoController {
 
     // Update [configuration] to have default values.
     configuration = configuration.copyWith(
-      vo: configuration.vo ?? 'gpu-next',
+      vo: configuration.vo ?? 'gpu',
       hwdec: configuration.hwdec ?? await getDefaultHwdec(),
     );
 
@@ -197,10 +197,8 @@ class AndroidVideoController extends PlatformVideoController {
         'vo': 'null',
         'hwdec': configuration.hwdec!,
         'vid': 'auto',
-        // 'opengl-es': 'yes',
         'force-window': 'yes',
         'gpu-api': configuration.vo == 'gpu-next' ? 'vulkan' : 'auto',
-        // 'gpu-context': 'android',
         'sub-use-margins': 'no',
         'sub-font-provider': 'none',
         'sub-scale-with-window': 'yes',
