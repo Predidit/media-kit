@@ -199,7 +199,7 @@ class AndroidVideoController extends PlatformVideoController {
         'vid': 'auto',
         'opengl-es': 'yes',
         'force-window': 'yes',
-        'gpu-api': 'vulkan',
+        'gpu-api': configuration.vo == 'gpu-next' ? 'vulkan' : 'auto',
         'gpu-context': 'android',
         'sub-use-margins': 'no',
         'sub-font-provider': 'none',
