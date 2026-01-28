@@ -198,7 +198,7 @@ class AndroidVideoController extends PlatformVideoController {
         'hwdec': configuration.hwdec!,
         'vid': 'auto',
         'force-window': 'yes',
-        'gpu-api': configuration.vo == 'gpu-next' ? 'vulkan' : 'auto',
+        'gpu-api': configuration.vo == 'gpu-next' ? 'vulkan,opengl' : 'auto',
         'sub-use-margins': 'no',
         'sub-font-provider': 'none',
         'sub-scale-with-window': 'yes',
