@@ -58,10 +58,10 @@ task downloadDependencies(type: Exec) {
 
         // Download all *.jar dependencies & verify their SHA-256 checksums.
         def filesToDownload = [
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.5/default-arm64-v8a.jar", "sha256": "7bfb400fa1b63b68e8a7272673a993cc37b12ba90c79713c7a02a7ac7e9aa773", "destination": file("$buildDir/v1.1.5/default-arm64-v8a.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.5/default-armeabi-v7a.jar", "sha256": "4f2545c8678c264f10520d5581ba619278c3df04c9ef3b3316e00f85436418fc", "destination": file("$buildDir/v1.1.5/default-armeabi-v7a.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.5/default-x86_64.jar", "sha256": "9cbdf04951226cf18a788802d879261595e4acdc271d6fde86315623620b88ab", "destination": file("$buildDir/v1.1.5/default-x86_64.jar")],
-            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.5/default-x86.jar", "sha256": "2f36dc1d12ee75a30cdfc4cf757ed34191bc80b9d323a06137197af0557e2f9c", "destination": file("$buildDir/v1.1.5/default-x86.jar")]
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.8/default-arm64-v8a.jar", "sha256": "eed6c7a9e7a3868be636d66e584901c7eb856affb8d760c828bb4a1023e703eb", "destination": file("$buildDir/v1.1.8/default-arm64-v8a.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.8/default-armeabi-v7a.jar", "sha256": "039ac9e4341f234ddc306e00b14cdfa31ec30d1e58245bf2d7e69dd7ce185abf", "destination": file("$buildDir/v1.1.8/default-armeabi-v7a.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.8/default-x86_64.jar", "sha256": "db80c8cbe2a770623f69cc16911c891e04230ec0e2ee7bac1220ef8db5164e08", "destination": file("$buildDir/v1.1.8/default-x86_64.jar")],
+            ["url": "https://github.com/Predidit/libmpv-android-video-build/releases/download/v1.1.8/default-x86.jar", "sha256": "0f4e0509b8dd158c6d9d02327fa73e52d0e547c14ca6d5c780f132aa5683d5a5", "destination": file("$buildDir/v1.1.8/default-x86.jar")]
         ]
 
         filesToDownload.each { fileInfo ->
