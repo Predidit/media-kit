@@ -298,17 +298,20 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, buf->texture, 0);
     
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    // Flush to ensure texture is fully defined before creating EGLImage
+    glFlush();
+    
     // Create EGLImage from texture for sharing between contexts
     EGLint egl_image_attribs[] = { EGL_NONE };
     buf->egl_image = eglCreateImageKHR(
         egl_display,
-        egl_context,
+        EGL_NO_CONTEXT,
         EGL_GL_TEXTURE_2D_KHR,
         (EGLClientBuffer)(guintptr)buf->texture,
         egl_image_attribs);
-    
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
     
     // Mark Flutter texture as invalid (needs recreation)
     buf->flutter_texture_valid = FALSE;
