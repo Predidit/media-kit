@@ -20,52 +20,6 @@
 // Number of buffers for mailbox triple buffering
 #define NUM_BUFFERS 3
 
-// EGLImage extension function pointers
-typedef EGLImageKHR (*PFNEGLCREATEIMAGEKHRPROC)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list);
-typedef EGLBoolean (*PFNEGLDESTROYIMAGEKHRPROC)(EGLDisplay dpy, EGLImageKHR image);
-typedef void (*PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)(GLenum target, GLeglImageOES image);
-
-// EGL_KHR_fence_sync extension function pointers
-typedef EGLSyncKHR (*PFNEGLCREATESYNCKHRPROC)(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
-typedef EGLBoolean (*PFNEGLDESTROYSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync);
-typedef EGLint (*PFNEGLCLIENTWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
-typedef EGLint (*PFNEGLWAITSYNCKHRPROC)(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
-
-// Define the extension functions
-#ifndef eglCreateImageKHR
-static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = NULL;
-#endif
-#ifndef eglDestroyImageKHR
-static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = NULL;
-#endif
-#ifndef glEGLImageTargetTexture2DOES
-static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = NULL;
-#endif
-
-// EGL_KHR_fence_sync extension functions
-static PFNEGLCREATESYNCKHRPROC _eglCreateSyncKHR = NULL;
-static PFNEGLDESTROYSYNCKHRPROC _eglDestroySyncKHR = NULL;
-static PFNEGLCLIENTWAITSYNCKHRPROC _eglClientWaitSyncKHR = NULL;
-static PFNEGLWAITSYNCKHRPROC _eglWaitSyncKHR = NULL;
-
-static void init_egl_extensions() {
-  static gboolean initialized = FALSE;
-  if (!initialized) {
-    // EGLImage extensions
-    eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-    glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-    
-    // EGL_KHR_fence_sync extensions
-    _eglCreateSyncKHR = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
-    _eglDestroySyncKHR = (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
-    _eglClientWaitSyncKHR = (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
-    _eglWaitSyncKHR = (PFNEGLWAITSYNCKHRPROC)eglGetProcAddress("eglWaitSyncKHR");
-    
-    initialized = TRUE;
-  }
-}
-
 // Buffer structure for mailbox triple buffering
 // Each buffer has its own GPU resources
 typedef struct {
@@ -185,7 +139,7 @@ static void texture_gl_dispose(GObject* object) {
         // Clean up EGLSyncKHR
         EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
         if (sync != EGL_NO_SYNC_KHR) {
-          _eglDestroySyncKHR(egl_display, sync);
+          eglDestroySyncKHR(egl_display, sync);
           buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
         }
         
@@ -228,7 +182,6 @@ static void texture_gl_class_init(TextureGLClass* klass) {
 }
 
 TextureGL* texture_gl_new(VideoOutput* video_output) {
-  init_egl_extensions();
   TextureGL* self = TEXTURE_GL(g_object_new(texture_gl_get_type(), NULL));
   self->video_output = video_output;
   return self;
@@ -270,9 +223,9 @@ void texture_gl_check_and_resize(TextureGL* self, gint64 required_width, gint64 
       // Wait for any pending GPU work before destroying resources
       EGLSyncKHR sync = buf->render_sync.load(std::memory_order_acquire);
       if (sync != EGL_NO_SYNC_KHR) {
-        _eglClientWaitSyncKHR(egl_display, sync, 
+        eglClientWaitSyncKHR(egl_display, sync, 
                               EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-        _eglDestroySyncKHR(egl_display, sync);
+        eglDestroySyncKHR(egl_display, sync);
         buf->render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_release);
       }
       
@@ -363,8 +316,8 @@ gboolean texture_gl_render(TextureGL* self) {
   EGLSyncKHR old_sync = back_buf->render_sync.exchange(EGL_NO_SYNC_KHR, std::memory_order_acq_rel);
   if (old_sync != EGL_NO_SYNC_KHR) {
     // Wait for previous GPU work to complete, then destroy the sync
-    _eglClientWaitSyncKHR(egl_display, old_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
-    _eglDestroySyncKHR(egl_display, old_sync);
+    eglClientWaitSyncKHR(egl_display, old_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
+    eglDestroySyncKHR(egl_display, old_sync);
   }
   
   gint32 required_width = self->current_width;
@@ -394,7 +347,7 @@ gboolean texture_gl_render(TextureGL* self) {
   
   // Create sync fence to mark render completion
   // Consumer will use this for GPU-side synchronization
-  EGLSyncKHR new_sync = _eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
+  EGLSyncKHR new_sync = eglCreateSyncKHR(egl_display, EGL_SYNC_FENCE_KHR, NULL);
   back_buf->render_sync.store(new_sync, std::memory_order_release);
   
   return TRUE;
@@ -485,14 +438,14 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   if (sync != EGL_NO_SYNC_KHR) {
     // Use GPU-side wait for better performance (doesn't block CPU)
     // This inserts a wait into Flutter's GL command stream
-    if (_eglWaitSyncKHR != NULL) {
-      _eglWaitSyncKHR(egl_display, sync, 0);
+    if (epoxy_has_egl_extension(egl_display, "EGL_KHR_wait_sync")) {
+      eglWaitSyncKHR(egl_display, sync, 0);
     } else {
       // Fallback to CPU wait if eglWaitSyncKHR not available
-      _eglClientWaitSyncKHR(egl_display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
+      eglClientWaitSyncKHR(egl_display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR);
     }
     // Destroy the sync after use (we own it now)
-    _eglDestroySyncKHR(egl_display, sync);
+    eglDestroySyncKHR(egl_display, sync);
   }
   
   // Check if we need to create/recreate Flutter texture for this buffer
