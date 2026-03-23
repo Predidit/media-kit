@@ -33,7 +33,13 @@ class D3D11Renderer {
   ID3D11Device* device() const { return d3d_11_device_; }
   IDXGISwapChain* swap_chain() const { return swap_chain_; }
 
-  D3D11Renderer(int32_t width, int32_t height);
+  // |flutter_adapter| is the IDXGIAdapter* Flutter uses for rendering,
+  // obtained via registrar->GetView()->GetGraphicsAdapter(). Passing it
+  // ensures media_kit creates its D3D11 device on the same GPU as Flutter,
+  // which is required for shared-texture interop to work. If nullptr, a
+  // default hardware adapter is used.
+  D3D11Renderer(int32_t width, int32_t height,
+                IDXGIAdapter* flutter_adapter = nullptr);
 
   ~D3D11Renderer();
 
@@ -42,7 +48,7 @@ class D3D11Renderer {
   void CopyTexture();
 
  private:
-  bool CreateD3D11Device();
+  bool CreateD3D11Device(IDXGIAdapter* adapter);
 
   bool CreateTexture();
 

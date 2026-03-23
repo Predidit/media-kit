@@ -25,10 +25,12 @@
 
 int D3D11Renderer::instance_count_ = 0;
 
-D3D11Renderer::D3D11Renderer(int32_t width, int32_t height)
+D3D11Renderer::D3D11Renderer(int32_t width, int32_t height,
+                             IDXGIAdapter* flutter_adapter)
     : width_(width), height_(height) {
   mutex_ = ::CreateMutex(NULL, FALSE, NULL);
-  if (!CreateD3D11Device()) {
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter_ref(flutter_adapter);
+  if (!CreateD3D11Device(adapter_ref.Get())) {
     throw std::runtime_error("Unable to create Direct3D 11 device.");
   }
   if (!CreateTexture()) {
@@ -118,7 +120,7 @@ void D3D11Renderer::CleanUp(bool release_device) {
   }
 }
 
-bool D3D11Renderer::CreateD3D11Device() {
+bool D3D11Renderer::CreateD3D11Device(IDXGIAdapter* adapter) {
   if (d3d_11_device_ != nullptr) {
     return true;  // Already created
   }
@@ -131,20 +133,27 @@ bool D3D11Renderer::CreateD3D11Device() {
       D3D_FEATURE_LEVEL_9_3,
   };
 
-  IDXGIAdapter* adapter = nullptr;
-  D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_UNKNOWN;
+  // Use the same DXGI adapter as Flutter so that the shared texture handle can
+  // be opened on both sides without a cross-adapter copy. On laptops with a
+  // MUX switch (dGPU-direct mode) Flutter may run on the dGPU while the
+  // default system adapter is the iGPU, causing silent black-screen failures.
+  //
+  // The adapter pointer comes from FlutterDesktopViewGetGraphicsAdapter, which
+  // follows COM conventions and AddRefs before returning. The caller wraps it
+  // in a ComPtr (see constructor) so our reference is released on scope exit.
+  // D3D11CreateDeviceAndSwapChain will take its own reference internally.
+  //
+  // D3D_DRIVER_TYPE must be UNKNOWN when an explicit adapter is supplied;
+  // fall back to HARDWARE when no adapter hint is available.
+  D3D_DRIVER_TYPE driver_type =
+      (adapter != nullptr) ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
 
-  // Automatically selecting adapter on Windows 10 RTM or greater
-  if (Utils::IsWindows10RTMOrGreater()) {
-    adapter = nullptr;
-    driver_type = D3D_DRIVER_TYPE_HARDWARE;
+  if (adapter != nullptr) {
+    std::cout << "media_kit: D3D11Renderer: Using Flutter's DXGI adapter."
+              << std::endl;
   } else {
-    IDXGIFactory* dxgi = nullptr;
-    ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
-    if (dxgi) {
-      dxgi->EnumAdapters(0, &adapter);
-      dxgi->Release();
-    }
+    std::cout << "media_kit: D3D11Renderer: Using default hardware adapter."
+              << std::endl;
   }
 
   // Create swap chain descriptor for offscreen rendering

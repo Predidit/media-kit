@@ -38,9 +38,17 @@ VideoOutput::VideoOutput(int64_t handle,
     if (configuration.enable_hardware_acceleration) {
       try {
         // Create D3D11 renderer with swap chain.
+        // Obtain Flutter's DXGI adapter so media_kit creates its D3D11 device
+        // on the same GPU. This is critical on laptops with a MUX switch in
+        // dGPU-direct mode, where Flutter and the default system adapter may
+        // be on different GPUs, causing shared-texture interop to silently fail.
+        IDXGIAdapter* flutter_adapter =
+            registrar_->GetView() ? registrar_->GetView()->GetGraphicsAdapter()
+                                  : nullptr;
         d3d11_renderer_ = std::make_unique<D3D11Renderer>(
             static_cast<int32_t>(width_.value_or(1)),
-            static_cast<int32_t>(height_.value_or(1)));
+            static_cast<int32_t>(height_.value_or(1)),
+            flutter_adapter);
         
         // Initialize mpv with the D3D11 device and swap chain
         mpv_dxgi_init_params init_params = {
