@@ -10,6 +10,10 @@
 
 #include <iostream>
 
+MailboxSwapChain::~MailboxSwapChain() {
+  ReleaseSlots();
+}
+
 HRESULT MailboxSwapChain::Create(ID3D11Device* device,
                                   int32_t width,
                                   int32_t height,
@@ -22,6 +26,18 @@ HRESULT MailboxSwapChain::Create(ID3D11Device* device,
   p->device_ = device;
   p->width_ = (width > 0) ? width : 1;
   p->height_ = (height > 0) ? height : 1;
+
+  {
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
+    device->GetImmediateContext(&ctx);
+    const HRESULT hr2 = ctx.As(&p->context4_);
+    if (FAILED(hr2)) {
+      std::cout << "media_kit: MailboxSwapChain: ID3D11DeviceContext4 not available "
+                   "(hr=0x" << std::hex << hr2 << std::dec << ")" << std::endl;
+      delete p;
+      return hr2;
+    }
+  }
 
   const HRESULT hr = p->AllocateSlots();
   if (FAILED(hr)) {
@@ -95,7 +111,11 @@ MailboxSwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) {
 }
 
 void MailboxSwapChain::ProducerCommit() {
-  // Publish write_slot_ into the mailbox (dirty=1) and recycle the evicted slot.
+  {
+    auto& ws = slots_[write_slot_];
+    context4_->Signal(ws.fence.Get(), ++ws.fence_value);
+  }
+
   const uint32_t desired = static_cast<uint32_t>(write_slot_) | 0x4u;
   uint32_t expected = mailbox_state_.load(std::memory_order_relaxed);
   while (!mailbox_state_.compare_exchange_weak(
@@ -107,6 +127,7 @@ void MailboxSwapChain::ProducerCommit() {
 HANDLE MailboxSwapChain::ConsumerAcquire() {
   uint32_t expected = mailbox_state_.load(std::memory_order_acquire);
   if (!(expected & 0x4u)) {
+    // No new frame — we already waited for this slot last time we acquired it.
     return slots_[read_slot_].shared_handle;
   }
   const uint32_t desired = static_cast<uint32_t>(read_slot_);  // dirty=0
@@ -117,7 +138,15 @@ HANDLE MailboxSwapChain::ConsumerAcquire() {
       return slots_[read_slot_].shared_handle;
   }
   read_slot_ = static_cast<int>(expected & 0x3u);
-  return slots_[read_slot_].shared_handle;
+
+  auto& rs = slots_[read_slot_];
+  if (rs.fence->GetCompletedValue() < rs.fence_value) {
+    if (SUCCEEDED(rs.fence->SetEventOnCompletion(rs.fence_value,
+                                                  rs.fence_event))) {
+      ::WaitForSingleObject(rs.fence_event, INFINITE);
+    }
+  }
+  return rs.shared_handle;
 }
 
 HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
@@ -131,7 +160,17 @@ HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
 }
 
 HRESULT MailboxSwapChain::AllocateSlots() {
-  // BGRA8, render-target + shader-resource, DXGI-shared across devices.
+  Microsoft::WRL::ComPtr<ID3D11Device5> device5;
+  {
+    const HRESULT hr =
+        device_->QueryInterface(__uuidof(ID3D11Device5), (void**)&device5);
+    if (FAILED(hr)) {
+      std::cout << "media_kit: MailboxSwapChain: ID3D11Device5 not available "
+                   "(hr=0x" << std::hex << hr << std::dec << ")" << std::endl;
+      return hr;
+    }
+  }
+
   D3D11_TEXTURE2D_DESC desc = {};
   desc.Width = static_cast<UINT>(width_);
   desc.Height = static_cast<UINT>(height_);
@@ -170,6 +209,28 @@ HRESULT MailboxSwapChain::AllocateSlots() {
                 << std::endl;
       return hr;
     }
+
+    hr = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE,
+                              __uuidof(ID3D11Fence),
+                              (void**)&slots_[i].fence);
+    if (FAILED(hr)) {
+      std::cout << "media_kit: MailboxSwapChain: CreateFence slot " << i
+                << " failed (hr=0x" << std::hex << hr << std::dec << ")"
+                << std::endl;
+      return hr;
+    }
+    slots_[i].fence_value = 0;
+
+    slots_[i].fence_event =
+        ::CreateEventW(nullptr, /*bManualReset=*/FALSE, /*bInitialState=*/FALSE,
+                       nullptr);
+    if (!slots_[i].fence_event) {
+      const HRESULT hrE = HRESULT_FROM_WIN32(::GetLastError());
+      std::cout << "media_kit: MailboxSwapChain: CreateEvent slot " << i
+                << " failed (hr=0x" << std::hex << hrE << std::dec << ")"
+                << std::endl;
+      return hrE;
+    }
   }
 
   return S_OK;
@@ -179,5 +240,11 @@ void MailboxSwapChain::ReleaseSlots() {
   for (auto& slot : slots_) {
     slot.texture.Reset();
     slot.shared_handle = nullptr;
+    slot.fence.Reset();
+    slot.fence_value = 0;
+    if (slot.fence_event) {
+      ::CloseHandle(slot.fence_event);
+      slot.fence_event = nullptr;
+    }
   }
 }

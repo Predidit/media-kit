@@ -11,6 +11,7 @@
 
 #include <Windows.h>
 #include <d3d11.h>
+#include <d3d11_4.h>
 #include <dxgi.h>
 #include <wrl.h>
 
@@ -114,7 +115,7 @@ class MailboxSwapChain final : public IDXGISwapChain {
 
  private:
   MailboxSwapChain() = default;
-  ~MailboxSwapChain() = default;
+  ~MailboxSwapChain();
 
   MailboxSwapChain(const MailboxSwapChain&) = delete;
   MailboxSwapChain& operator=(const MailboxSwapChain&) = delete;
@@ -125,9 +126,13 @@ class MailboxSwapChain final : public IDXGISwapChain {
   struct TextureSlot {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     HANDLE shared_handle = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11Fence> fence;
+    HANDLE fence_event = nullptr;
+    uint64_t fence_value = 0;
   };
 
   ID3D11Device* device_ = nullptr;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4_;
 
   int32_t width_ = 1;
   int32_t height_ = 1;
