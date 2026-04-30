@@ -15,8 +15,9 @@
 
 int D3D11Renderer::instance_count_ = 0;
 
-D3D11Renderer::D3D11Renderer(int32_t width, int32_t height)
-    : width_(width), height_(height) {
+D3D11Renderer::D3D11Renderer(int32_t width, int32_t height,
+                             IDXGIAdapter* flutter_adapter)
+    : width_(width), height_(height), flutter_adapter_(flutter_adapter) {
   if (!CreateD3D11Device()) {
     throw std::runtime_error("Unable to create Direct3D 11 device.");
   }
@@ -77,17 +78,22 @@ bool D3D11Renderer::CreateD3D11Device() {
       D3D_FEATURE_LEVEL_9_3,
   };
 
-  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter = flutter_adapter_;
   D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_UNKNOWN;
 
-  if (Utils::IsWindows10RTMOrGreater()) {
-    driver_type = D3D_DRIVER_TYPE_HARDWARE;
-  } else {
-    Microsoft::WRL::ComPtr<IDXGIFactory> dxgi;
-    ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
-    if (dxgi) {
-      dxgi->EnumAdapters(0, &adapter);
+  if (!adapter) {
+    if (Utils::IsWindows10RTMOrGreater()) {
+      driver_type = D3D_DRIVER_TYPE_HARDWARE;
+    } else {
+      Microsoft::WRL::ComPtr<IDXGIFactory> dxgi;
+      ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
+      if (dxgi) {
+        dxgi->EnumAdapters(0, &adapter);
+      }
     }
+  } else {
+    std::cout << "media_kit: D3D11Renderer: Using Flutter's DXGI adapter."
+              << std::endl;
   }
 
   const HRESULT hr = ::D3D11CreateDevice(

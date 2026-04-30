@@ -12,6 +12,7 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <wrl.h>
 
 #include <cstdint>
@@ -42,7 +43,13 @@ class D3D11Renderer {
   // Passed to mpv as mpv_dxgi_init_params::swapchain (void*).
   IDXGISwapChain* swap_chain() const { return mailbox_swap_chain_.Get(); }
 
-  D3D11Renderer(int32_t width, int32_t height);
+  // |flutter_adapter| is the IDXGIAdapter* returned by
+  // FlutterDesktopViewGetGraphicsAdapter.  When non-null the D3D11 device is
+  // created on exactly that adapter so the plugin always shares the same GPU
+  // as the Flutter compositor.  Pass nullptr to fall back to the legacy
+  // heuristic (hardware default on Win10+, adapter 0 on older Windows).
+  explicit D3D11Renderer(int32_t width, int32_t height,
+                         IDXGIAdapter* flutter_adapter = nullptr);
   ~D3D11Renderer();
 
   // Recreates the three mailbox slots at the new dimensions.
@@ -71,6 +78,7 @@ class D3D11Renderer {
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> flutter_adapter_;
 
   Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
 

@@ -37,10 +37,14 @@ VideoOutput::VideoOutput(int64_t handle,
     
     if (configuration.enable_hardware_acceleration) {
       try {
-        // Create D3D11 renderer with swap chain.
+        IDXGIAdapter* flutter_adapter = nullptr;
+        if (auto* view = registrar_->GetView()) {
+          flutter_adapter = view->GetGraphicsAdapter();
+        }
         d3d11_renderer_ = std::make_unique<D3D11Renderer>(
             static_cast<int32_t>(width_.value_or(1)),
-            static_cast<int32_t>(height_.value_or(1)));
+            static_cast<int32_t>(height_.value_or(1)),
+            flutter_adapter);
         
         // Initialize mpv with the D3D11 device and swap chain
         mpv_dxgi_init_params init_params = {
