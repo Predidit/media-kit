@@ -1,7 +1,7 @@
-// This file is a part of media_kit
+﻿// This file is a part of media_kit
 // (https://github.com/media-kit/media-kit).
 //
-// Copyright © 2025 & onwards, Predidit.
+// Copyright © Predidit.
 // All rights reserved.
 // Use of this source code is governed by MIT license that can be found in the
 // LICENSE file.
@@ -12,58 +12,76 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <wrl.h>
 
 #include <cstdint>
-#include <functional>
 #include <iostream>
 
+#include "mailbox_swap_chain.h"
 #include "utils.h"
 
-// |D3D11Renderer| provides an abstraction around Direct3D 11 for video
-// rendering with libmpv's native DXGI support.
-// This replaces the previous ANGLE-based implementation with a simpler,
-// more efficient approach using mpv's built-in D3D11 renderer.
-
+// D3D11Renderer creates a D3D11 device and owns a MailboxSwapChain that
+// implements the lock-free triple-buffer mailbox between the libmpv rendering
+// thread (producer) and Flutter's render thread (consumer).
+//
+// The MailboxSwapChain is passed directly to mpv as the IDXGISwapChain* in
+// mpv_dxgi_init_params.  mpv calls GetBuffer(0, ...) to obtain a render
+// target, renders into it, and flushes.  The plugin then calls
+// ProducerCommit() to atomically publish the frame.  Flutter's
+// GpuSurfaceTexture callback calls ConsumerAcquire() to receive the DXGI
+// shared HANDLE of the newest complete frame — with no copy and no OS lock.
 class D3D11Renderer {
  public:
-  const int32_t width() const { return width_; }
-  const int32_t height() const { return height_; }
-  const HANDLE handle() const { return handle_; }
-  ID3D11Device* device() const { return d3d_11_device_; }
-  IDXGISwapChain* swap_chain() const { return swap_chain_; }
+  int32_t width() const { return width_; }
+  int32_t height() const { return height_; }
 
-  D3D11Renderer(int32_t width, int32_t height);
+  // Raw device pointer used by VideoOutput to populate mpv_dxgi_init_params.
+  ID3D11Device* device() const { return d3d_11_device_.Get(); }
 
+  // IDXGISwapChain* facade backed by MailboxSwapChain.
+  // Passed to mpv as mpv_dxgi_init_params::swapchain (void*).
+  IDXGISwapChain* swap_chain() const { return mailbox_swap_chain_.Get(); }
+
+  // |flutter_adapter| is the IDXGIAdapter* returned by
+  // FlutterDesktopViewGetGraphicsAdapter.  When non-null the D3D11 device is
+  // created on exactly that adapter so the plugin always shares the same GPU
+  // as the Flutter compositor.  Pass nullptr to fall back to the legacy
+  // heuristic (hardware default on Win10+, adapter 0 on older Windows).
+  explicit D3D11Renderer(int32_t width, int32_t height,
+                         IDXGIAdapter* flutter_adapter = nullptr);
   ~D3D11Renderer();
 
+  // Recreates the three mailbox slots at the new dimensions.
+  // Must be called from the producer thread only.
   void SetSize(int32_t width, int32_t height);
 
-  void CopyTexture();
+  // Called from the producer thread (mpv thread pool) after
+  // mpv_render_context_render returns.  Publishes the rendered frame.
+  void ProducerCommit();
+
+  // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
+  // Returns the DXGI shared HANDLE of the most recent complete frame.
+  HANDLE ConsumerAcquire();
+
+  // Returns the DXGI shared HANDLE for the current read slot without
+  // advancing mailbox state.  Used once during texture registration before
+  // the consumer thread starts.
+  HANDLE ReadHandleSnapshot() const;
 
  private:
-  bool CreateD3D11Device();
-
-  bool CreateTexture();
-
-  void CleanUp(bool release_device);
+  bool CreateD3D11Device(IDXGIAdapter* flutter_adapter);
+  bool CreateMailbox();
 
   int32_t width_ = 1;
   int32_t height_ = 1;
-  HANDLE handle_ = nullptr;
 
-  // Sync operations.
-  HANDLE mutex_ = nullptr;
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
 
-  // D3D 11
-  ID3D11Device* d3d_11_device_ = nullptr;
-  ID3D11DeviceContext* d3d_11_device_context_ = nullptr;
-  IDXGISwapChain* swap_chain_ = nullptr;
-
-  // Shared texture for Flutter rendering (created from swap chain back buffer)
-  Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_texture_;
+  Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
 
   static int instance_count_;
 };
 
-#endif
+#endif  // D3D11_RENDERER_H_
