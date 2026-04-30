@@ -28,15 +28,8 @@ D3D11Renderer::D3D11Renderer(int32_t width, int32_t height)
 
 D3D11Renderer::~D3D11Renderer() {
   mailbox_swap_chain_.Reset();
-
-  if (d3d_11_device_context_) {
-    d3d_11_device_context_->Release();
-    d3d_11_device_context_ = nullptr;
-  }
-  if (d3d_11_device_) {
-    d3d_11_device_->Release();
-    d3d_11_device_ = nullptr;
-  }
+  d3d_11_device_context_.Reset();
+  d3d_11_device_.Reset();
   instance_count_--;
 }
 
@@ -84,27 +77,25 @@ bool D3D11Renderer::CreateD3D11Device() {
       D3D_FEATURE_LEVEL_9_3,
   };
 
-  IDXGIAdapter* adapter = nullptr;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
   D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_UNKNOWN;
 
   if (Utils::IsWindows10RTMOrGreater()) {
     driver_type = D3D_DRIVER_TYPE_HARDWARE;
   } else {
-    IDXGIFactory* dxgi = nullptr;
+    Microsoft::WRL::ComPtr<IDXGIFactory> dxgi;
     ::CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi);
     if (dxgi) {
       dxgi->EnumAdapters(0, &adapter);
-      dxgi->Release();
     }
   }
 
   const HRESULT hr = ::D3D11CreateDevice(
-      adapter, driver_type, nullptr,
+      adapter.Get(), driver_type, nullptr,
       D3D11_CREATE_DEVICE_BGRA_SUPPORT,
       feature_levels, static_cast<UINT>(std::size(feature_levels)),
-      D3D11_SDK_VERSION, &d3d_11_device_, nullptr, &d3d_11_device_context_);
-
-  if (adapter) adapter->Release();
+      D3D11_SDK_VERSION, d3d_11_device_.GetAddressOf(), nullptr,
+      d3d_11_device_context_.GetAddressOf());
 
   if (FAILED(hr)) {
     std::cout << "media_kit: D3D11Renderer: D3D11CreateDevice failed (hr=0x"
@@ -130,7 +121,7 @@ bool D3D11Renderer::CreateD3D11Device() {
 bool D3D11Renderer::CreateMailbox() {
   MailboxSwapChain* raw = nullptr;
   const HRESULT hr =
-      MailboxSwapChain::Create(d3d_11_device_, width_, height_, &raw);
+      MailboxSwapChain::Create(d3d_11_device_.Get(), width_, height_, &raw);
   if (FAILED(hr)) {
     std::cout << "media_kit: D3D11Renderer: MailboxSwapChain::Create failed "
                  "(hr=0x"

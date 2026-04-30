@@ -1,4 +1,4 @@
-// This file is a part of media_kit
+﻿// This file is a part of media_kit
 // (https://github.com/media-kit/media-kit).
 //
 // Copyright © Predidit.
@@ -36,7 +36,7 @@ class D3D11Renderer {
   int32_t height() const { return height_; }
 
   // Raw device pointer used by VideoOutput to populate mpv_dxgi_init_params.
-  ID3D11Device* device() const { return d3d_11_device_; }
+  ID3D11Device* device() const { return d3d_11_device_.Get(); }
 
   // IDXGISwapChain* facade backed by MailboxSwapChain.
   // Passed to mpv as mpv_dxgi_init_params::swapchain (void*).
@@ -69,8 +69,8 @@ class D3D11Renderer {
   int32_t width_ = 1;
   int32_t height_ = 1;
 
-  ID3D11Device* d3d_11_device_ = nullptr;
-  ID3D11DeviceContext* d3d_11_device_context_ = nullptr;
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
 
   Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
 
