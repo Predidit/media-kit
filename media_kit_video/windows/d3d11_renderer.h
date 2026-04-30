@@ -70,7 +70,7 @@ class D3D11Renderer {
   HANDLE ReadHandleSnapshot() const;
 
  private:
-  bool CreateD3D11Device();
+  bool CreateD3D11Device(IDXGIAdapter* flutter_adapter);
   bool CreateMailbox();
 
   int32_t width_ = 1;
@@ -78,7 +78,6 @@ class D3D11Renderer {
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
-  Microsoft::WRL::ComPtr<IDXGIAdapter> flutter_adapter_;
 
   Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
 

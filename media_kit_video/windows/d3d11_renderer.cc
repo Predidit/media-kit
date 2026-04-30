@@ -17,8 +17,8 @@ int D3D11Renderer::instance_count_ = 0;
 
 D3D11Renderer::D3D11Renderer(int32_t width, int32_t height,
                              IDXGIAdapter* flutter_adapter)
-    : width_(width), height_(height), flutter_adapter_(flutter_adapter) {
-  if (!CreateD3D11Device()) {
+    : width_(width), height_(height) {
+  if (!CreateD3D11Device(flutter_adapter)) {
     throw std::runtime_error("Unable to create Direct3D 11 device.");
   }
   if (!CreateMailbox()) {
@@ -67,7 +67,7 @@ HANDLE D3D11Renderer::ReadHandleSnapshot() const {
   return nullptr;
 }
 
-bool D3D11Renderer::CreateD3D11Device() {
+bool D3D11Renderer::CreateD3D11Device(IDXGIAdapter* flutter_adapter) {
   if (d3d_11_device_) return true;
 
   const D3D_FEATURE_LEVEL feature_levels[] = {
@@ -78,7 +78,7 @@ bool D3D11Renderer::CreateD3D11Device() {
       D3D_FEATURE_LEVEL_9_3,
   };
 
-  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter = flutter_adapter_;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter(flutter_adapter);
   D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_UNKNOWN;
 
   if (!adapter) {
