@@ -162,7 +162,9 @@ void VideoOutput::Render() {
     if (d3d11_renderer_ != nullptr) {
       mpv_render_context_render(render_context_, nullptr);
       mpv_render_context_report_swap(render_context_);
-      d3d11_renderer_->CopyTexture();
+      // Atomically publish the rendered slot to the mailbox so that Flutter's
+      // GpuSurfaceTexture callback can import it without a copy.
+      d3d11_renderer_->ProducerCommit();
     }
     // S/W
     if (pixel_buffer_ != nullptr) {
@@ -293,22 +295,29 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
     
     auto texture = std::make_unique<FlutterDesktopGpuSurfaceDescriptor>();
     texture->struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
-    texture->handle = d3d11_renderer_->handle();
+    // Seed with the current read-slot handle so Flutter has a valid surface
+    // even before the first mpv frame is committed.
+    texture->handle = d3d11_renderer_->ReadHandleSnapshot();
     texture->width = texture->visible_width = d3d11_renderer_->width();
     texture->height = texture->visible_height = d3d11_renderer_->height();
     texture->release_context = nullptr;
     texture->release_callback = [](void*) {};
     texture->format = kFlutterDesktopPixelFormatBGRA8888;
-    
+
     auto texture_variant =
         std::make_unique<flutter::TextureVariant>(flutter::GpuSurfaceTexture(
             kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle, [&](auto, auto) {
               std::lock_guard<std::mutex> lock(textures_mutex_);
               if (texture_id_) {
-                return textures_.at(texture_id_).get();
-              } else {
-                return (FlutterDesktopGpuSurfaceDescriptor*)nullptr;
+                auto* desc = textures_.at(texture_id_).get();
+                // ConsumerAcquire() is lock-free.  texture_id_ != 0 implies
+                // d3d11_renderer_ is valid: UnregisterTexture guarantees that
+                // Flutter stops invoking this callback before the destructor
+                // resets d3d11_renderer_.
+                desc->handle = d3d11_renderer_->ConsumerAcquire();
+                return desc;
               }
+              return (FlutterDesktopGpuSurfaceDescriptor*)nullptr;
             }));
     // Register new texture.
     texture_id_ =

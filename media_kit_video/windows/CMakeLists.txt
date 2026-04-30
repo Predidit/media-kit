@@ -27,6 +27,7 @@ if(MEDIA_KIT_LIBS_AVAILABLE)
   add_library(
     ${PLUGIN_NAME} SHARED
     "d3d11_renderer.cc"
+    "mailbox_swap_chain.cc"
     "media_kit_video_plugin_c_api.cc"
     "media_kit_video_plugin.cc"
     "video_output_manager.cc"
@@ -45,6 +46,8 @@ if(MEDIA_KIT_LIBS_AVAILABLE)
     ${PLUGIN_NAME} PRIVATE
     FLUTTER_PLUGIN_IMPL
   )
+
+  target_compile_options(${PLUGIN_NAME} PRIVATE "/utf-8")
 
   target_include_directories(
     ${PLUGIN_NAME} INTERFACE
