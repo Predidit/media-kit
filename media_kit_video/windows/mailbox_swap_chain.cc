@@ -114,8 +114,46 @@ void MailboxSwapChain::ProducerCommit() {
   auto& ws = slots_[write_slot_];
   context4_->Signal(ws.fence.Get(), ++ws.fence_value);
 
-  // Atomically publish write_slot_ as the new pending frame.
+  // This runs one full render-cycle after the *previous* Signal was enqueued.
+  // By then the D3D11 runtime has had ample opportunity to submit the prior
+  // command buffer to the GPU, so GetCompletedValue() is far more likely to
+  // have advanced than it would be inside ConsumerAcquire (which can be
+  // called microseconds after the Signal).  The check is non-blocking: if
+  // the fence isn't done yet, we simply leave latest_completed_slot_ as-is
+  // and try again next frame.
   //
+  // On success we do a combined promotion CAS on mailbox_state_:
+  //   (has_pending=1, pending=P, completed=C, free=F)
+  //   → (has_pending=0, extra=C, completed=P, free=F)
+  // then store latest_completed_slot_ = P with release ordering so that
+  // ConsumerAcquire's acquire load cannot observe P before mailbox_state_
+  // reflects P in the 'completed' role (i.e., protected from the producer).
+  {
+    uint32_t snap = mailbox_state_.load(std::memory_order_acquire);
+    if (snap & (1u << 6)) {  // has_pending
+      const int pend = static_cast<int>((snap >> 4) & 0x3u);
+      const int comp = static_cast<int>((snap >> 2) & 0x3u);
+      const int fr   = static_cast<int>( snap        & 0x3u);
+      if (slots_[pend].fence->GetCompletedValue() >=
+          slots_[pend].fence_value) {
+        const uint32_t snap_desired =
+            (static_cast<uint32_t>(comp) << 4) |
+            (static_cast<uint32_t>(pend) << 2) |
+            static_cast<uint32_t>(fr);
+        if (mailbox_state_.compare_exchange_strong(
+                snap, snap_desired,
+                std::memory_order_acq_rel,
+                std::memory_order_relaxed)) {
+          latest_completed_slot_.store(pend, std::memory_order_release);
+        }
+        // CAS failure means no concurrent writer exists (ProducerCommit is
+        // called from a single producer thread); the only way it can fail is
+        // if mailbox_state_ was already has_pending=0, which means nothing
+        // to promote.  Either way, leave latest_completed_slot_ untouched.
+      }
+    }
+  }
+
   // Desired state:
   //   has_pending = 1
   //   pending     = write_slot_          (new latest frame)
@@ -144,60 +182,12 @@ void MailboxSwapChain::ProducerCommit() {
 }
 
 HANDLE MailboxSwapChain::ConsumerAcquire() {
-  uint32_t expected = mailbox_state_.load(std::memory_order_acquire);
-
-  if (!(expected & (1u << 6))) {
-    return slots_[(expected >> 2) & 0x3u].shared_handle;
-  }
-
-  const int pending_slot   = static_cast<int>((expected >> 4) & 0x3u);
-  const int completed_slot = static_cast<int>((expected >> 2) & 0x3u);
-  const int free_slot      = static_cast<int>( expected       & 0x3u);
-
-  if (slots_[pending_slot].fence->GetCompletedValue() <
-      slots_[pending_slot].fence_value) {
-    return slots_[completed_slot].shared_handle;
-  }
-
-  // Pending frame is GPU-complete: promote it to completed.
-  //
-  // Desired state:
-  //   has_pending    = 0
-  //   pending_or_extra = old completed_slot  (it becomes the extra free slot)
-  //   completed_slot   = pending_slot        (newly confirmed)
-  //   free_slot        = free_slot           (unchanged)
-  const uint32_t desired =
-      (static_cast<uint32_t>(completed_slot) << 4) |
-      (static_cast<uint32_t>(pending_slot)   << 2) |
-      static_cast<uint32_t>(free_slot);
-
-  while (!mailbox_state_.compare_exchange_weak(
-      expected, desired,
-      std::memory_order_acq_rel,
-      std::memory_order_relaxed)) {
-    if (!(expected & (1u << 6))) {
-      return slots_[(expected >> 2) & 0x3u].shared_handle;
-    }
-    const int new_pending = static_cast<int>((expected >> 4) & 0x3u);
-    if (slots_[new_pending].fence->GetCompletedValue() <
-        slots_[new_pending].fence_value) {
-      return slots_[(expected >> 2) & 0x3u].shared_handle;
-    }
-    const int new_completed = static_cast<int>((expected >> 2) & 0x3u);
-    const int new_free      = static_cast<int>( expected       & 0x3u);
-    const uint32_t new_desired =
-        (static_cast<uint32_t>(new_completed) << 4) |
-        (static_cast<uint32_t>(new_pending)   << 2) |
-        static_cast<uint32_t>(new_free);
-    if (mailbox_state_.compare_exchange_weak(
-            expected, new_desired,
-            std::memory_order_acq_rel,
-            std::memory_order_relaxed)) {
-      return slots_[new_pending].shared_handle;
-    }
-  }
-
-  return slots_[pending_slot].shared_handle;
+  // Always return the most recently fence-confirmed frame.
+  // Advancement is handled exclusively by ProducerCommit (called one full
+  // render-cycle after each Signal, where fence completion is far more
+  // likely).
+  return slots_[latest_completed_slot_.load(std::memory_order_acquire)]
+      .shared_handle;
 }
 
 HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
@@ -205,6 +195,7 @@ HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
   width_ = (width > 0) ? width : 1;
   height_ = (height > 0) ? height : 1;
   mailbox_state_.store(57u, std::memory_order_relaxed);
+  latest_completed_slot_.store(2, std::memory_order_relaxed);
   write_slot_ = 0;
   return AllocateSlots();
 }

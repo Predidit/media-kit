@@ -116,11 +116,11 @@ class MailboxSwapChain final : public IDXGISwapChain {
   // Must only be called from the producer thread with no active consumer.
   HRESULT Resize(int32_t width, int32_t height);
 
-  // Returns the completed-slot HANDLE without advancing mailbox state.
+  // Returns the latest GPU-confirmed HANDLE without advancing mailbox state.
   // Safe to call before the consumer thread starts.
   HANDLE ReadHandleSnapshot() const {
-    const uint32_t s = mailbox_state_.load(std::memory_order_relaxed);
-    return slots_[(s >> 2) & 0x3u].shared_handle;
+    return slots_[latest_completed_slot_.load(std::memory_order_acquire)]
+        .shared_handle;
   }
 
   int32_t width() const { return width_; }
@@ -154,6 +154,13 @@ class MailboxSwapChain final : public IDXGISwapChain {
   // Lock-free mailbox state — see bit-field comment at top of class.
   // Initial value 57u = 0b0_11_10_01.
   std::atomic<uint32_t> mailbox_state_{57u};
+
+  // Cache of the most recently fence-confirmed completed slot.
+  // ConsumerAcquire reads this directly (one atomic load, no CAS, no fence
+  // poll).  Updated by ProducerCommit after a successful non-blocking
+  // pending→completed promotion.  Initialised to 2, which matches the
+  // 'completed' field in mailbox_state_'s initial value 57u.
+  std::atomic<int> latest_completed_slot_{2};
 
   int write_slot_ = 0;  // producer-private
 
