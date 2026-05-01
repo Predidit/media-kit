@@ -111,52 +111,101 @@ MailboxSwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) {
 }
 
 void MailboxSwapChain::ProducerCommit() {
-  {
-    auto& ws = slots_[write_slot_];
-    context4_->Signal(ws.fence.Get(), ++ws.fence_value);
-  }
+  auto& ws = slots_[write_slot_];
+  context4_->Signal(ws.fence.Get(), ++ws.fence_value);
 
-  const uint32_t desired = static_cast<uint32_t>(write_slot_) | 0x4u;
+  // Atomically publish write_slot_ as the new pending frame.
+  //
+  // Desired state:
+  //   has_pending = 1
+  //   pending     = write_slot_          (new latest frame)
+  //   completed   = old completed_slot   (unchanged)
+  //   free        = old pending_or_extra (recycled: was old pending or extra_free)
+  //
+  // new write_slot_ (producer-private) = old free_slot.
   uint32_t expected = mailbox_state_.load(std::memory_order_relaxed);
-  while (!mailbox_state_.compare_exchange_weak(
-      expected, desired, std::memory_order_release,
-      std::memory_order_relaxed)) {}
-  write_slot_ = static_cast<int>(expected & 0x3u);
+  while (true) {
+    const int old_free      = static_cast<int>( expected        & 0x3u);
+    const int old_completed = static_cast<int>((expected >> 2)  & 0x3u);
+    const int old_poe       = static_cast<int>((expected >> 4)  & 0x3u);
+    const uint32_t desired =
+        (1u << 6) |
+        (static_cast<uint32_t>(write_slot_)   << 4) |
+        (static_cast<uint32_t>(old_completed) << 2) |
+        static_cast<uint32_t>(old_poe);
+    if (mailbox_state_.compare_exchange_weak(
+            expected, desired,
+            std::memory_order_release,
+            std::memory_order_relaxed)) {
+      write_slot_ = old_free;
+      break;
+    }
+  }
 }
 
 HANDLE MailboxSwapChain::ConsumerAcquire() {
   uint32_t expected = mailbox_state_.load(std::memory_order_acquire);
-  if (!(expected & 0x4u)) {
-    return slots_[read_slot_].shared_handle;
+
+  if (!(expected & (1u << 6))) {
+    return slots_[(expected >> 2) & 0x3u].shared_handle;
   }
 
-  int peek_slot = static_cast<int>(expected & 0x3u);
-  if (slots_[peek_slot].fence->GetCompletedValue() < slots_[peek_slot].fence_value) {
-    return slots_[read_slot_].shared_handle;
+  const int pending_slot   = static_cast<int>((expected >> 4) & 0x3u);
+  const int completed_slot = static_cast<int>((expected >> 2) & 0x3u);
+  const int free_slot      = static_cast<int>( expected       & 0x3u);
+
+  if (slots_[pending_slot].fence->GetCompletedValue() <
+      slots_[pending_slot].fence_value) {
+    return slots_[completed_slot].shared_handle;
   }
 
-  const uint32_t desired = static_cast<uint32_t>(read_slot_);  // dirty=0
+  // Pending frame is GPU-complete: promote it to completed.
+  //
+  // Desired state:
+  //   has_pending    = 0
+  //   pending_or_extra = old completed_slot  (it becomes the extra free slot)
+  //   completed_slot   = pending_slot        (newly confirmed)
+  //   free_slot        = free_slot           (unchanged)
+  const uint32_t desired =
+      (static_cast<uint32_t>(completed_slot) << 4) |
+      (static_cast<uint32_t>(pending_slot)   << 2) |
+      static_cast<uint32_t>(free_slot);
+
   while (!mailbox_state_.compare_exchange_weak(
-      expected, desired, std::memory_order_acq_rel,
+      expected, desired,
+      std::memory_order_acq_rel,
       std::memory_order_relaxed)) {
-    if (!(expected & 0x4u))
-      return slots_[read_slot_].shared_handle;
-    peek_slot = static_cast<int>(expected & 0x3u);
-    if (slots_[peek_slot].fence->GetCompletedValue() < slots_[peek_slot].fence_value)
-      return slots_[read_slot_].shared_handle;
+    if (!(expected & (1u << 6))) {
+      return slots_[(expected >> 2) & 0x3u].shared_handle;
+    }
+    const int new_pending = static_cast<int>((expected >> 4) & 0x3u);
+    if (slots_[new_pending].fence->GetCompletedValue() <
+        slots_[new_pending].fence_value) {
+      return slots_[(expected >> 2) & 0x3u].shared_handle;
+    }
+    const int new_completed = static_cast<int>((expected >> 2) & 0x3u);
+    const int new_free      = static_cast<int>( expected       & 0x3u);
+    const uint32_t new_desired =
+        (static_cast<uint32_t>(new_completed) << 4) |
+        (static_cast<uint32_t>(new_pending)   << 2) |
+        static_cast<uint32_t>(new_free);
+    if (mailbox_state_.compare_exchange_weak(
+            expected, new_desired,
+            std::memory_order_acq_rel,
+            std::memory_order_relaxed)) {
+      return slots_[new_pending].shared_handle;
+    }
   }
 
-  read_slot_ = static_cast<int>(expected & 0x3u);
-  return slots_[read_slot_].shared_handle;
+  return slots_[pending_slot].shared_handle;
 }
 
 HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
   ReleaseSlots();
   width_ = (width > 0) ? width : 1;
   height_ = (height > 0) ? height : 1;
-  mailbox_state_.store(2u, std::memory_order_relaxed);
+  mailbox_state_.store(57u, std::memory_order_relaxed);
   write_slot_ = 0;
-  read_slot_ = 1;
   return AllocateSlots();
 }
 
@@ -185,7 +234,7 @@ HRESULT MailboxSwapChain::AllocateSlots() {
   desc.CPUAccessFlags = 0;
   desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 4; ++i) {
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &slots_[i].texture);
     if (FAILED(hr)) {
       std::cout << "media_kit: MailboxSwapChain: CreateTexture2D slot " << i

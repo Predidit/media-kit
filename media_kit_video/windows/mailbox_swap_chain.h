@@ -18,14 +18,25 @@
 #include <atomic>
 #include <cstdint>
 
-// Minimal IDXGISwapChain facade backed by a lock-free triple-buffer mailbox.
+// Minimal IDXGISwapChain facade backed by a lock-free 4-slot mailbox with
+// a last-completed-frame cache.
 //
-// Three BGRA8 textures are kept, each with a DXGI shared HANDLE.
+// Four BGRA8 textures are kept, each with a DXGI shared HANDLE.
 // mailbox_state_ is a single atomic<uint32_t>:
-//   bits [1:0]  slot index in the mailbox (0-2)
-//   bit  [2]    dirty flag: 1 = producer has committed a new frame
+//   bits [1:0] = free_slot         (0-3): producer takes this for the next frame
+//   bits [3:2] = completed_slot    (0-3): most recent fence-confirmed frame;
+//                                          safe Consumer fallback at any time
+//   bits [5:4] = pending_or_extra  (0-3): has_pending=1 → latest submitted frame
+//                                          (fence may still be in-flight);
+//                                          has_pending=0 → second free slot
+//   bit  [6]   = has_pending            : 1 = a new frame is waiting to be consumed
 //
-// {write_slot_, mailbox slot, read_slot_} is always a permutation of {0,1,2}.
+// 4-slot invariant (all roles are always distinct):
+//   has_pending=1: write_slot_(private) | free | pending | completed  = 4 slots
+//   has_pending=0: write_slot_(private) | free | extra_free | completed = 4 slots
+//
+// Initial value 57u = 0b0_11_10_01:
+//   has_pending=0, extra_free=3, completed=2, free=1, write_slot_=0 (private)
 class MailboxSwapChain final : public IDXGISwapChain {
  public:
   // Returns an AddRef'd pointer (ref count = 1). device must outlive this.
@@ -105,9 +116,11 @@ class MailboxSwapChain final : public IDXGISwapChain {
   // Must only be called from the producer thread with no active consumer.
   HRESULT Resize(int32_t width, int32_t height);
 
-  // Returns the current read-slot HANDLE without advancing mailbox state.
+  // Returns the completed-slot HANDLE without advancing mailbox state.
+  // Safe to call before the consumer thread starts.
   HANDLE ReadHandleSnapshot() const {
-    return slots_[read_slot_].shared_handle;
+    const uint32_t s = mailbox_state_.load(std::memory_order_relaxed);
+    return slots_[(s >> 2) & 0x3u].shared_handle;
   }
 
   int32_t width() const { return width_; }
@@ -136,13 +149,13 @@ class MailboxSwapChain final : public IDXGISwapChain {
   int32_t width_ = 1;
   int32_t height_ = 1;
 
-  TextureSlot slots_[3];
+  TextureSlot slots_[4];
 
-  // Lock-free mailbox: bits [1:0] = slot index (0-2), bit [2] = dirty; init = 2u.
-  std::atomic<uint32_t> mailbox_state_{2u};
+  // Lock-free mailbox state — see bit-field comment at top of class.
+  // Initial value 57u = 0b0_11_10_01.
+  std::atomic<uint32_t> mailbox_state_{57u};
 
   int write_slot_ = 0;  // producer-private
-  int read_slot_ = 1;   // consumer-private
 
   std::atomic<ULONG> ref_count_{1u};
 };
