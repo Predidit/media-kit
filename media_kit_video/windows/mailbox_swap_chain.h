@@ -127,7 +127,6 @@ class MailboxSwapChain final : public IDXGISwapChain {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     HANDLE shared_handle = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Fence> fence;
-    HANDLE fence_event = nullptr;
     uint64_t fence_value = 0;
   };
 

@@ -127,26 +127,27 @@ void MailboxSwapChain::ProducerCommit() {
 HANDLE MailboxSwapChain::ConsumerAcquire() {
   uint32_t expected = mailbox_state_.load(std::memory_order_acquire);
   if (!(expected & 0x4u)) {
-    // No new frame — we already waited for this slot last time we acquired it.
     return slots_[read_slot_].shared_handle;
   }
+
+  int peek_slot = static_cast<int>(expected & 0x3u);
+  if (slots_[peek_slot].fence->GetCompletedValue() < slots_[peek_slot].fence_value) {
+    return slots_[read_slot_].shared_handle;
+  }
+
   const uint32_t desired = static_cast<uint32_t>(read_slot_);  // dirty=0
   while (!mailbox_state_.compare_exchange_weak(
       expected, desired, std::memory_order_acq_rel,
       std::memory_order_relaxed)) {
     if (!(expected & 0x4u))
       return slots_[read_slot_].shared_handle;
+    peek_slot = static_cast<int>(expected & 0x3u);
+    if (slots_[peek_slot].fence->GetCompletedValue() < slots_[peek_slot].fence_value)
+      return slots_[read_slot_].shared_handle;
   }
-  read_slot_ = static_cast<int>(expected & 0x3u);
 
-  auto& rs = slots_[read_slot_];
-  if (rs.fence->GetCompletedValue() < rs.fence_value) {
-    if (SUCCEEDED(rs.fence->SetEventOnCompletion(rs.fence_value,
-                                                  rs.fence_event))) {
-      ::WaitForSingleObject(rs.fence_event, INFINITE);
-    }
-  }
-  return rs.shared_handle;
+  read_slot_ = static_cast<int>(expected & 0x3u);
+  return slots_[read_slot_].shared_handle;
 }
 
 HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
@@ -220,17 +221,6 @@ HRESULT MailboxSwapChain::AllocateSlots() {
       return hr;
     }
     slots_[i].fence_value = 0;
-
-    slots_[i].fence_event =
-        ::CreateEventW(nullptr, /*bManualReset=*/FALSE, /*bInitialState=*/FALSE,
-                       nullptr);
-    if (!slots_[i].fence_event) {
-      const HRESULT hrE = HRESULT_FROM_WIN32(::GetLastError());
-      std::cout << "media_kit: MailboxSwapChain: CreateEvent slot " << i
-                << " failed (hr=0x" << std::hex << hrE << std::dec << ")"
-                << std::endl;
-      return hrE;
-    }
   }
 
   return S_OK;
@@ -242,9 +232,5 @@ void MailboxSwapChain::ReleaseSlots() {
     slot.shared_handle = nullptr;
     slot.fence.Reset();
     slot.fence_value = 0;
-    if (slot.fence_event) {
-      ::CloseHandle(slot.fence_event);
-      slot.fence_event = nullptr;
-    }
   }
 }
