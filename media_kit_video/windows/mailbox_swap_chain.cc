@@ -111,51 +111,92 @@ MailboxSwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) {
 }
 
 void MailboxSwapChain::ProducerCommit() {
+  auto& ws = slots_[write_slot_];
+  context4_->Signal(ws.fence.Get(), ++ws.fence_value);
+
+  // This runs one full render-cycle after the *previous* Signal was enqueued.
+  // By then the D3D11 runtime has had ample opportunity to submit the prior
+  // command buffer to the GPU, so GetCompletedValue() is far more likely to
+  // have advanced than it would be inside ConsumerAcquire (which can be
+  // called microseconds after the Signal).  The check is non-blocking: if
+  // the fence isn't done yet, we simply leave latest_completed_slot_ as-is
+  // and try again next frame.
+  //
+  // On success we do a combined promotion CAS on mailbox_state_:
+  //   (has_pending=1, pending=P, completed=C, free=F)
+  //   → (has_pending=0, extra=C, completed=P, free=F)
+  // then store latest_completed_slot_ = P with release ordering so that
+  // ConsumerAcquire's acquire load cannot observe P before mailbox_state_
+  // reflects P in the 'completed' role (i.e., protected from the producer).
   {
-    auto& ws = slots_[write_slot_];
-    context4_->Signal(ws.fence.Get(), ++ws.fence_value);
+    uint32_t snap = mailbox_state_.load(std::memory_order_acquire);
+    if (snap & (1u << 6)) {  // has_pending
+      const int pend = static_cast<int>((snap >> 4) & 0x3u);
+      const int comp = static_cast<int>((snap >> 2) & 0x3u);
+      const int fr   = static_cast<int>( snap        & 0x3u);
+      if (slots_[pend].fence->GetCompletedValue() >=
+          slots_[pend].fence_value) {
+        const uint32_t snap_desired =
+            (static_cast<uint32_t>(comp) << 4) |
+            (static_cast<uint32_t>(pend) << 2) |
+            static_cast<uint32_t>(fr);
+        if (mailbox_state_.compare_exchange_strong(
+                snap, snap_desired,
+                std::memory_order_acq_rel,
+                std::memory_order_relaxed)) {
+          latest_completed_slot_.store(pend, std::memory_order_release);
+        }
+        // CAS failure means no concurrent writer exists (ProducerCommit is
+        // called from a single producer thread); the only way it can fail is
+        // if mailbox_state_ was already has_pending=0, which means nothing
+        // to promote.  Either way, leave latest_completed_slot_ untouched.
+      }
+    }
   }
 
-  const uint32_t desired = static_cast<uint32_t>(write_slot_) | 0x4u;
+  // Desired state:
+  //   has_pending = 1
+  //   pending     = write_slot_          (new latest frame)
+  //   completed   = old completed_slot   (unchanged)
+  //   free        = old pending_or_extra (recycled: was old pending or extra_free)
+  //
+  // new write_slot_ (producer-private) = old free_slot.
   uint32_t expected = mailbox_state_.load(std::memory_order_relaxed);
-  while (!mailbox_state_.compare_exchange_weak(
-      expected, desired, std::memory_order_release,
-      std::memory_order_relaxed)) {}
-  write_slot_ = static_cast<int>(expected & 0x3u);
+  while (true) {
+    const int old_free      = static_cast<int>( expected        & 0x3u);
+    const int old_completed = static_cast<int>((expected >> 2)  & 0x3u);
+    const int old_poe       = static_cast<int>((expected >> 4)  & 0x3u);
+    const uint32_t desired =
+        (1u << 6) |
+        (static_cast<uint32_t>(write_slot_)   << 4) |
+        (static_cast<uint32_t>(old_completed) << 2) |
+        static_cast<uint32_t>(old_poe);
+    if (mailbox_state_.compare_exchange_weak(
+            expected, desired,
+            std::memory_order_release,
+            std::memory_order_relaxed)) {
+      write_slot_ = old_free;
+      break;
+    }
+  }
 }
 
 HANDLE MailboxSwapChain::ConsumerAcquire() {
-  uint32_t expected = mailbox_state_.load(std::memory_order_acquire);
-  if (!(expected & 0x4u)) {
-    // No new frame — we already waited for this slot last time we acquired it.
-    return slots_[read_slot_].shared_handle;
-  }
-  const uint32_t desired = static_cast<uint32_t>(read_slot_);  // dirty=0
-  while (!mailbox_state_.compare_exchange_weak(
-      expected, desired, std::memory_order_acq_rel,
-      std::memory_order_relaxed)) {
-    if (!(expected & 0x4u))
-      return slots_[read_slot_].shared_handle;
-  }
-  read_slot_ = static_cast<int>(expected & 0x3u);
-
-  auto& rs = slots_[read_slot_];
-  if (rs.fence->GetCompletedValue() < rs.fence_value) {
-    if (SUCCEEDED(rs.fence->SetEventOnCompletion(rs.fence_value,
-                                                  rs.fence_event))) {
-      ::WaitForSingleObject(rs.fence_event, INFINITE);
-    }
-  }
-  return rs.shared_handle;
+  // Always return the most recently fence-confirmed frame.
+  // Advancement is handled exclusively by ProducerCommit (called one full
+  // render-cycle after each Signal, where fence completion is far more
+  // likely).
+  return slots_[latest_completed_slot_.load(std::memory_order_acquire)]
+      .shared_handle;
 }
 
 HRESULT MailboxSwapChain::Resize(int32_t width, int32_t height) {
   ReleaseSlots();
   width_ = (width > 0) ? width : 1;
   height_ = (height > 0) ? height : 1;
-  mailbox_state_.store(2u, std::memory_order_relaxed);
+  mailbox_state_.store(57u, std::memory_order_relaxed);
+  latest_completed_slot_.store(2, std::memory_order_relaxed);
   write_slot_ = 0;
-  read_slot_ = 1;
   return AllocateSlots();
 }
 
@@ -184,7 +225,7 @@ HRESULT MailboxSwapChain::AllocateSlots() {
   desc.CPUAccessFlags = 0;
   desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 4; ++i) {
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &slots_[i].texture);
     if (FAILED(hr)) {
       std::cout << "media_kit: MailboxSwapChain: CreateTexture2D slot " << i
@@ -220,17 +261,6 @@ HRESULT MailboxSwapChain::AllocateSlots() {
       return hr;
     }
     slots_[i].fence_value = 0;
-
-    slots_[i].fence_event =
-        ::CreateEventW(nullptr, /*bManualReset=*/FALSE, /*bInitialState=*/FALSE,
-                       nullptr);
-    if (!slots_[i].fence_event) {
-      const HRESULT hrE = HRESULT_FROM_WIN32(::GetLastError());
-      std::cout << "media_kit: MailboxSwapChain: CreateEvent slot " << i
-                << " failed (hr=0x" << std::hex << hrE << std::dec << ")"
-                << std::endl;
-      return hrE;
-    }
   }
 
   return S_OK;
@@ -242,9 +272,5 @@ void MailboxSwapChain::ReleaseSlots() {
     slot.shared_handle = nullptr;
     slot.fence.Reset();
     slot.fence_value = 0;
-    if (slot.fence_event) {
-      ::CloseHandle(slot.fence_event);
-      slot.fence_event = nullptr;
-    }
   }
 }

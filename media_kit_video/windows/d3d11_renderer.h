@@ -27,10 +27,14 @@
 //
 // The MailboxSwapChain is passed directly to mpv as the IDXGISwapChain* in
 // mpv_dxgi_init_params.  mpv calls GetBuffer(0, ...) to obtain a render
-// target, renders into it, and flushes.  The plugin then calls
-// ProducerCommit() to atomically publish the frame.  Flutter's
-// GpuSurfaceTexture callback calls ConsumerAcquire() to receive the DXGI
-// shared HANDLE of the newest complete frame — with no copy and no OS lock.
+// target and submits GPU work into it.  The plugin then calls
+// ProducerCommit(), which (a) signals a fence on the submitted work,
+// (b) non-blockingly checks the *previous* frame's fence and, if already
+// GPU-complete, promotes it to latest_completed_slot_, and (c) atomically
+// publishes write_slot_ as the new pending frame.  Flutter's
+// GpuSurfaceTexture callback calls ConsumerAcquire() — a single acquire
+// load of latest_completed_slot_ — to receive the DXGI shared HANDLE of
+// the newest confirmed frame, with no copy, no flush, and no OS lock.
 class D3D11Renderer {
  public:
   int32_t width() const { return width_; }
@@ -57,11 +61,14 @@ class D3D11Renderer {
   void SetSize(int32_t width, int32_t height);
 
   // Called from the producer thread (mpv thread pool) after
-  // mpv_render_context_render returns.  Publishes the rendered frame.
+  // mpv_render_context_render returns.  Signals the frame fence, then
+  // non-blockingly attempts to promote the previous pending frame to
+  // latest_completed_slot_, and finally publishes the new pending frame.
   void ProducerCommit();
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
-  // Returns the DXGI shared HANDLE of the most recent complete frame.
+  // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame
+  // via a single atomic load — no fence poll, no flush, no stall.
   HANDLE ConsumerAcquire();
 
   // Returns the DXGI shared HANDLE for the current read slot without
