@@ -166,8 +166,6 @@ void VideoOutput::Render() {
     if (d3d11_renderer_ != nullptr) {
       mpv_render_context_render(render_context_, nullptr);
       mpv_render_context_report_swap(render_context_);
-      // Atomically publish the rendered slot to the mailbox so that Flutter's
-      // GpuSurfaceTexture callback can import it without a copy.
       d3d11_renderer_->ProducerCommit();
     }
     // S/W
@@ -299,8 +297,8 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
     
     auto texture = std::make_unique<FlutterDesktopGpuSurfaceDescriptor>();
     texture->struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
-    // Seed with the current read-slot handle so Flutter has a valid surface
-    // even before the first mpv frame is committed.
+    // Seed with the latest-completed-slot handle so Flutter has a valid
+    // surface even before the first mpv frame is committed.
     texture->handle = d3d11_renderer_->ReadHandleSnapshot();
     texture->width = texture->visible_width = d3d11_renderer_->width();
     texture->height = texture->visible_height = d3d11_renderer_->height();

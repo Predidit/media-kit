@@ -106,10 +106,17 @@ class MailboxSwapChain final : public IDXGISwapChain {
   }
 
   // Called from the producer thread after mpv_render_context_render returns.
+  // In addition to publishing write_slot_ as the new pending frame, it
+  // non-blockingly polls the *previous* pending frame's fence and, if the GPU
+  // has already completed it, promotes it to completed and updates
+  // latest_completed_slot_ (release store).  This is the sole site that
+  // advances latest_completed_slot_; ConsumerAcquire never touches the fence.
   void ProducerCommit();
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
-  // Returns the DXGI shared HANDLE of the most recent complete frame.
+  // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame.
+  // Implementation is a single acquire load of latest_completed_slot_ —
+  // no CAS, no fence poll, no flush, no stall, no KeyedMutex.
   HANDLE ConsumerAcquire();
 
   // Recreates all three texture slots at the new dimensions.
