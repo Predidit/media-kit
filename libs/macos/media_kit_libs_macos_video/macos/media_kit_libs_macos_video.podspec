@@ -16,12 +16,15 @@ Pod::Spec.new do |s|
   s.author           = { 'Hitesh Kumar Saini' => 'saini123hitesh@gmail.com' }
 
   s.source           = { :path => '.' }
-  s.source_files     = 'Classes/**/*'
+  s.source_files     = 'media_kit_libs_macos_video/Sources/media_kit_libs_macos_video/**/*.swift'
   s.dependency 'FlutterMacOS'
+  s.resource_bundles = {
+    'media_kit_libs_macos_video_privacy' => ['media_kit_libs_macos_video/Sources/media_kit_libs_macos_video/PrivacyInfo.xcprivacy']
+  }
 
   s.vendored_frameworks = 'Frameworks/*.xcframework'
 
-  s.platform = :osx, '10.9'
+  s.platform = :osx, '10.15'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 end
