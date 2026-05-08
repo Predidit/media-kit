@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "media_kit_video",
     platforms: [
-        .macOS("10.15")
+        .macOS("10.9")
     ],
     products: [
         .library(name: "media-kit-video", targets: ["media_kit_video"])

@@ -33,7 +33,7 @@ let libmpvChecksums = [
 let package = Package(
     name: "media_kit_libs_macos_audio",
     platforms: [
-        .macOS("10.15")
+        .macOS("10.9")
     ],
     products: [
         .library(name: "media-kit-libs-macos-audio", targets: ["media_kit_libs_macos_audio"] + libmpvTargets)
