@@ -37,6 +37,7 @@ let package = Package(
     ],
     products: [
         .library(name: "media-kit-libs-macos-audio", targets: ["media_kit_libs_macos_audio"] + libmpvTargets)
+        .library(name: "Mpv", targets: ["Mpv"])
     ],
     dependencies: [],
     targets: libmpvTargets.map { framework in
