@@ -50,7 +50,7 @@ let libmpvProductTargets: [String] = ["media_kit_libs_ios_video"] + libmpvTarget
 let package = Package(
     name: "media_kit_libs_ios_video",
     platforms: [
-        .iOS("13.0")
+        .iOS("9.0")
     ],
     products: [
         .library(name: "media-kit-libs-ios-video", targets: libmpvProductTargets),
