@@ -14,16 +14,8 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
-            name: "Mpv",
-            path: "Sources/Mpv",
-            sources: ["shim.c"],
-            publicHeadersPath: "include"
-        ),
-        .target(
             name: "media_kit_video",
-            dependencies: [
-                .target(name: "Mpv")
-            ],
+            dependencies: [],
             sources: ["plugin"],
             resources: [
                 .process("PrivacyInfo.xcprivacy")
