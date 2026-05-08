@@ -18,16 +18,16 @@ let libmpvTargets = [
 
 let libmpvArtifactBase = "https://github.com/media-kit/libmpv-darwin-build/releases/download/v0.7.0/libmpv-xcframeworks_v0.7.0_macos-universal-audio-full"
 let libmpvChecksums = [
-    "Avcodec": "1372bdc0fa7f4ded6b565d29023aba08dd0ed9d6b1916bd2f03409c6370f4e1d",
-    "Avfilter": "8c471be58b680ae3ac60ffef3ea166447adcd40f660b051a6e4f59aecdd45893",
-    "Avformat": "3bb73535b43a1cc992777c3b017eb5a84bf4d0ae437c9250ff8511a161617a46",
-    "Avutil": "3d65e0b2bd65cad4c8a639194398753329dc657c2f418a9c7c662ec8947d76d4",
-    "Mbedcrypto": "1107eef2c02409840b5f51f9333e527e027aef26f2246af5831f489d50eb6ba0",
-    "Mbedtls": "f9e8b88cf029b1d8c3093fb3c3150ebc8815f05b7ca259950a1c05e31c7ac532",
-    "Mbedx509": "8697ad3585f41fb8b8806efaabdd6ff1fa617c7b5a05c13aa86152902ae12917",
-    "Mpv": "6f5d7fe8b31235d28d8a5fb97b801f0cfc3f19ccad7ac2cb9100f699aafb95e3",
-    "Swresample": "87c53bd728d0406624c782497a0ef971d28226a84f67997c1891db8bc6c2cc12",
-    "Swscale": "ea7786b057662edc505696bd9dbbb8bc48feadd869eee1d8eaeab8b2da15d9ed"
+    "Avcodec": "f6e069c6f5cafec22ef627581a060d1023ccf271d8c7b68f06bb0d88c950c004",
+    "Avfilter": "ff96f16434b31a86abaf449899a00af513c250a5df1a10ca0a54edf44b56813e",
+    "Avformat": "280f460238ba21a14499a597c0acf3136d91ef76695fbb92baa43cfae77e28a2",
+    "Avutil": "e1f12d87fdb75cf171ee194732a982a28dd35629ffda19918df7f64a32a8ef33",
+    "Mbedcrypto": "4d1c8cac9a138f87a027d3693a4e79cefbe93e3a437fc120b12b3ccee7561a1f",
+    "Mbedtls": "35487e0a17f77aeb90fbe0bda8287a6199e5785329a44236dd07146fcf8241f6",
+    "Mbedx509": "6fbaf1af7ea11d261565b293fe622d746d3be415e56d8b3b73de40840ec1c501",
+    "Mpv": "38ba4f85bc035099497ebc95a068f20cd462162dae5b431f7fe64004041474c6",
+    "Swresample": "86d9f31bc2ca354e45fcfdaf1b8fdd388b3d47d867d6789c688f2f61fd9552eb",
+    "Swscale": "c0ef85b08ead86e0f968cfbd77b1d6914dc341ecd1e3374870411be6ebbd16f0"
 ]
 
 let package = Package(
@@ -36,7 +36,7 @@ let package = Package(
         .macOS("10.15")
     ],
     products: [
-        .library(name: "media_kit_libs_macos_audio", targets: ["media_kit_libs_macos_audio"] + libmpvTargets)
+        .library(name: "media-kit-libs-macos-audio", targets: ["media_kit_libs_macos_audio"] + libmpvTargets)
     ],
     dependencies: [],
     targets: libmpvTargets.map { framework in
