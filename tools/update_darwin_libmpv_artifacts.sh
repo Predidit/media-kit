@@ -9,11 +9,11 @@ VERSION_SET=0
 usage() {
   cat <<'EOF'
 Usage:
-  tool/update_darwin_libmpv_artifacts.sh [version] [--dry-run] [--repo=<owner/name>]
+  tools/update_darwin_libmpv_artifacts.sh [version] [--dry-run] [--repo=<owner/name>]
 
 Example:
-  tool/update_darwin_libmpv_artifacts.sh
-  tool/update_darwin_libmpv_artifacts.sh v0.7.0
+  tools/update_darwin_libmpv_artifacts.sh
+  tools/update_darwin_libmpv_artifacts.sh v0.7.0
 
 The script reads GitHub release asset digests and updates Darwin libmpv artifact
 versions/checksums. Existing CocoaPods Makefiles use .tar.gz assets. Future
