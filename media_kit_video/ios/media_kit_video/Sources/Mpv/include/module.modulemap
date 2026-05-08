@@ -1,7 +1,0 @@
-module Mpv {
-  header "mpv/client.h"
-  header "mpv/render.h"
-  header "mpv/render_gl.h"
-  header "mpv/stream_cb.h"
-  export *
-}
