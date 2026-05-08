@@ -11,8 +11,8 @@ topics:
   - cross-platform
 
 environment:
-  sdk: ^3.5.0
-  flutter: ">=3.24.0"
+  sdk: ^3.6.0
+  flutter: ">=3.27.4"
 
 dependencies:
   flutter:

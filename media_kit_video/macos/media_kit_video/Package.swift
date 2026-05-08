@@ -11,11 +11,15 @@ let package = Package(
     products: [
         .library(name: "media-kit-video", targets: ["media_kit_video"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(name: "media_kit_libs_macos_video", path: "../media_kit_libs_macos_video")
+    ],
     targets: [
         .target(
             name: "media_kit_video",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Mpv", package: "media_kit_libs_macos_video")
+            ],
             sources: ["plugin"],
             resources: [
                 .process("PrivacyInfo.xcprivacy")

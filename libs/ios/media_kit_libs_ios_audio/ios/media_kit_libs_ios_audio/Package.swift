@@ -18,16 +18,16 @@ let libmpvTargets = [
 
 let libmpvArtifactBase = "https://github.com/media-kit/libmpv-darwin-build/releases/download/v0.7.0/libmpv-xcframeworks_v0.7.0_ios-universal-audio-default"
 let libmpvChecksums = [
-    "Avcodec": "fc72195ca32ed023a6230e4e558323fdb14d8e779b7c68cf97ed56ac6d00aebb",
-    "Avfilter": "e4d71789a98a9f0d60d83de15b7facf6bcf5914f25a6614e8b956296899a99d7",
-    "Avformat": "4abb7dd215203a22caaabb215b0b2f5e10fd1fe0c8a1ae874908eeea8859eb1e",
-    "Avutil": "63573305de494575ca29b4bfe328997c0e844132d9e4b6bf8c22ffd4f3cf6273",
-    "Mbedcrypto": "b016619250601bac48c1b628f958d352d58716bf74fcb6168d7c0ef7b1a78e4d",
-    "Mbedtls": "457264fdcdaea78ff643c5d3fa184876f955fe202471b7f2b856fb698794269e",
-    "Mbedx509": "1cde5fa0f6d5308d3a012ce4925551aaad0449e63af82de2ee509970645e96e6",
-    "Mpv": "0c052ddcb71ab19bd1ae2bbc74514bbfad2ef71eb7b41468c7e71ee9cf7dd2dd",
-    "Swresample": "5ddbeb5a57a59e87d3b62f33d6340fbcdc35a3dc972064d53c87b9cabf97b4fc",
-    "Swscale": "302507bbd858e5fc84a88a441ae4b14d577a5a6bd8119ed2e2367468fc9a9dbb"
+    "Avcodec": "0603092e376ff396bcfb5e93e6af61b047b0f9b50efcf8d53f93f2b347c1d537",
+    "Avfilter": "9f78b4b9ae03784183b4aeb2c916af7609d3969b0e6845a6a4a0e571982f78d3",
+    "Avformat": "b2485d949649574c7b98a9fba32e51c26b6aaff3a9cae21c7c30a5e5cd3c4379",
+    "Avutil": "0c29965740fa1a110a47a8839492de93e305bbba0ccb6602be61f9b396b60d02",
+    "Mbedcrypto": "ae80a9915a93589aaab373be7428e92e577749a724bff7054550449f3aee7083",
+    "Mbedtls": "60a7135f9c93d90aa56232255a997e6f699d7d7df9ddab32e97470700216241b",
+    "Mbedx509": "3eb4221a54c2652b85351a61b6b7f6f5a613dac743120655174c21892faa8eae",
+    "Mpv": "2d683792d1461307c7a79e57df987dae5d640310f788de595ce3e16f5181a0ad",
+    "Swresample": "d63bc716105d409b61fd671fb824a1cf8bc3f927d699d75a90e5571af1349f3e",
+    "Swscale": "368135287a59ae417b9ab1607b046ba3e740bdb4b814fe328e83b6d0fee356eb"
 ]
 
 let package = Package(
@@ -36,7 +36,7 @@ let package = Package(
         .iOS("13.0")
     ],
     products: [
-        .library(name: "media_kit_libs_ios_audio", targets: ["media_kit_libs_ios_audio"] + libmpvTargets)
+        .library(name: "media-kit-libs-ios-audio", targets: ["media_kit_libs_ios_audio"] + libmpvTargets)
     ],
     dependencies: [],
     targets: libmpvTargets.map { framework in
