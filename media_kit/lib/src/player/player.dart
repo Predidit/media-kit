@@ -326,6 +326,26 @@ class Player {
     );
   }
 
+  /// Takes the snapshot of the current video frame & returns image bytes that
+  /// are safe to retain or transfer to another isolate.
+  ///
+  /// This is useful for `format == null`, where the native backend returns raw
+  /// BGRA pixels. [screenshot] keeps the low-copy raw path for performance, but
+  /// those bytes may be backed by native memory whose lifetime ends after the
+  /// call. [safeScreenshot] copies raw pixels into Dart-owned memory before
+  /// returning them.
+  ///
+  /// Encoded formats (`image/jpeg` & `image/png`) are already safe; for them,
+  /// this method behaves the same as [screenshot].
+  Future<Uint8List?> safeScreenshot(
+      {String? format = 'image/jpeg',
+      bool includeLibassSubtitles = false}) async {
+    return platform?.safeScreenshot(
+      format: format,
+      includeLibassSubtitles: includeLibassSubtitles,
+    );
+  }
+
   /// Internal platform specific identifier for this [Player] instance.
   ///
   /// Since, [int] is a primitive type, it can be used to pass this [Player] instance to native code without directly depending upon this library.

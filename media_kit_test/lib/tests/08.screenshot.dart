@@ -7,7 +7,7 @@ import '../common/sources/sources.dart';
 import '../common/widgets.dart';
 
 class Screenshot extends StatefulWidget {
-  const Screenshot({Key? key}) : super(key: key);
+  const Screenshot({super.key});
 
   @override
   State<Screenshot> createState() => _ScreenshotState();
@@ -21,6 +21,7 @@ class _ScreenshotState extends State<Screenshot> {
   );
 
   Image? image;
+  bool threadSafe = true;
 
   @override
   void initState() {
@@ -35,18 +36,34 @@ class _ScreenshotState extends State<Screenshot> {
     super.dispose();
   }
 
+  Future<void> takeScreenshot() async {
+    final screenshot = await (threadSafe
+        ? player.safeScreenshot(format: 'image/png')
+        : player.screenshot(format: 'image/png'));
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (screenshot != null) {
+        image = Image.memory(screenshot);
+      }
+    });
+  }
+
   List<Widget> get items => [
         const SizedBox(height: 16.0),
+        SwitchListTile(
+          title: const Text('Thread safe'),
+          value: threadSafe,
+          onChanged: (value) {
+            setState(() {
+              threadSafe = value;
+            });
+          },
+        ),
         Center(
           child: ElevatedButton(
-            onPressed: () async {
-              final screenshot = await player.screenshot();
-              if (screenshot != null) {
-                setState(() {
-                  image = Image.memory(screenshot);
-                });
-              }
-            },
+            onPressed: takeScreenshot,
             child: const Text('Screenshot'),
           ),
         ),

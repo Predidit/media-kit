@@ -1412,6 +1412,18 @@ class WebPlayer extends PlatformPlayer {
     }
   }
 
+  @override
+  Future<Uint8List?> safeScreenshot(
+      {String? format = 'image/jpeg',
+      bool synchronized = true,
+      bool includeLibassSubtitles = false}) {
+    return screenshot(
+      format: format,
+      synchronized: synchronized,
+      includeLibassSubtitles: includeLibassSubtitles,
+    );
+  }
+
   void _loadSource(Media media) {
     try {
       if (_isHLS(media.uri)) {
