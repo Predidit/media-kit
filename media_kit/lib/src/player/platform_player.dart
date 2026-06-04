@@ -291,6 +291,14 @@ abstract class PlatformPlayer {
     );
   }
 
+  Future<Uint8List?> safeScreenshot(
+      {String? format = 'image/jpeg',
+      bool includeLibassSubtitles = false}) async {
+    throw UnimplementedError(
+      '[PlatformPlayer.safeScreenshot] is not implemented',
+    );
+  }
+
   Future<int> get handle {
     throw UnimplementedError(
       '[PlatformPlayer.handle] is not implemented',
