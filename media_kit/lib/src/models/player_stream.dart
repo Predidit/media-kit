@@ -69,6 +69,9 @@ class PlayerStream {
   /// Audio bitrate of the currently playing [Media].
   final Stream<double?> audioBitrate;
 
+  /// Video bitrate of the currently playing [Media].
+  final Stream<double?> videoBitrate;
+
   /// Currently selected [AudioDevice]s.
   final Stream<AudioDevice> audioDevice;
 
@@ -113,6 +116,7 @@ class PlayerStream {
     this.audioParams,
     this.videoParams,
     this.audioBitrate,
+    this.videoBitrate,
     this.audioDevice,
     this.audioDevices,
     this.track,

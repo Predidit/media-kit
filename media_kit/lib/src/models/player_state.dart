@@ -11,6 +11,8 @@ import 'package:media_kit/src/models/audio_params.dart';
 import 'package:media_kit/src/models/video_params.dart';
 import 'package:media_kit/src/models/playlist_mode.dart';
 
+const Object _undefined = Object();
+
 /// {@template player_state}
 ///
 /// PlayerState
@@ -68,6 +70,9 @@ class PlayerState {
   /// Audio bitrate of the currently playing [Media].
   final double? audioBitrate;
 
+  /// Video bitrate of the currently playing [Media].
+  final double? videoBitrate;
+
   /// Currently selected [AudioDevice].
   final AudioDevice audioDevice;
 
@@ -106,6 +111,7 @@ class PlayerState {
     this.audioParams = const AudioParams(),
     this.videoParams = const VideoParams(),
     this.audioBitrate,
+    this.videoBitrate,
     this.audioDevice = const AudioDevice('auto', ''),
     this.audioDevices = const [AudioDevice('auto', '')],
     this.track = const Track(),
@@ -130,13 +136,14 @@ class PlayerState {
     PlaylistMode? playlistMode,
     AudioParams? audioParams,
     VideoParams? videoParams,
-    double? audioBitrate,
+    Object? audioBitrate = _undefined,
+    Object? videoBitrate = _undefined,
     AudioDevice? audioDevice,
     List<AudioDevice>? audioDevices,
     Track? track,
     Tracks? tracks,
-    int? width,
-    int? height,
+    Object? width = _undefined,
+    Object? height = _undefined,
     List<String>? subtitle,
   }) {
     return PlayerState(
@@ -154,13 +161,18 @@ class PlayerState {
       playlistMode: playlistMode ?? this.playlistMode,
       audioParams: audioParams ?? this.audioParams,
       videoParams: videoParams ?? this.videoParams,
-      audioBitrate: audioBitrate ?? this.audioBitrate,
+      audioBitrate: identical(audioBitrate, _undefined)
+          ? this.audioBitrate
+          : audioBitrate as double?,
+      videoBitrate: identical(videoBitrate, _undefined)
+          ? this.videoBitrate
+          : videoBitrate as double?,
       audioDevice: audioDevice ?? this.audioDevice,
       audioDevices: audioDevices ?? this.audioDevices,
       track: track ?? this.track,
       tracks: tracks ?? this.tracks,
-      width: width ?? this.width,
-      height: height ?? this.height,
+      width: identical(width, _undefined) ? this.width : width as int?,
+      height: identical(height, _undefined) ? this.height : height as int?,
       subtitle: subtitle ?? this.subtitle,
     );
   }
@@ -182,6 +194,7 @@ class PlayerState {
       'audioParams: $audioParams, '
       'videoParams: $videoParams, '
       'audioBitrate: $audioBitrate, '
+      'videoBitrate: $videoBitrate, '
       'audioDevice: $audioDevice, '
       'audioDevices: $audioDevices, '
       'track: $track, '
