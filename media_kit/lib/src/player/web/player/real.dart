@@ -510,6 +510,9 @@ class WebPlayer extends PlatformPlayer {
       if (!audioBitrateController.isClosed) {
         audioBitrateController.add(null);
       }
+      if (!videoBitrateController.isClosed) {
+        videoBitrateController.add(null);
+      }
       // if (!audioDeviceController.isClosed) {
       //   audioDeviceController.add(AudioDevice.auto());
       // }

@@ -71,6 +71,10 @@ void main() {
         state.audioBitrate,
         isNull,
       );
+      expect(
+        state.videoBitrate,
+        isNull,
+      );
       expect(state.videoParams.pixelformat, isNull);
       expect(state.videoParams.hwPixelformat, isNull);
       expect(state.videoParams.w, isNull);

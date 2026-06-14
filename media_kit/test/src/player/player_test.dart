@@ -2792,6 +2792,7 @@ void main() {
       expect(player.state.audioParams, equals(const AudioParams()));
       expect(player.state.videoParams, equals(const VideoParams()));
       expect(player.state.audioBitrate, equals(null));
+      expect(player.state.videoBitrate, equals(null));
       expect(player.state.track, equals(const Track()));
       expect(player.state.tracks, equals(const Tracks()));
       expect(player.state.width, equals(null));

@@ -317,6 +317,9 @@ class NativePlayer extends PlatformPlayer {
         // if (!audioBitrateController.isClosed) {
         //   audioBitrateController.add(null);
         // }
+        if (!videoBitrateController.isClosed) {
+          videoBitrateController.add(null);
+        }
         // if (!audioDeviceController.isClosed) {
         //   audioDeviceController.add(AudioDevice.auto());
         // }
@@ -1696,6 +1699,23 @@ class NativePlayer extends PlatformPlayer {
           }
         }
       }
+      if (prop.ref.name.cast<Utf8>().toDartString() == 'video-bitrate' &&
+          prop.ref.format == generated.mpv_format.MPV_FORMAT_DOUBLE) {
+        if (state.playlist.index < state.playlist.medias.length &&
+            state.playlist.index >= 0) {
+          final bitrate = prop.ref.data.cast<Double>().value;
+          if (!videoBitrateController.isClosed &&
+              bitrate != state.videoBitrate) {
+            videoBitrateController.add(bitrate);
+            state = state.copyWith(videoBitrate: bitrate);
+          }
+        } else {
+          if (!videoBitrateController.isClosed) {
+            videoBitrateController.add(null);
+            state = state.copyWith(videoBitrate: null);
+          }
+        }
+      }
       if (prop.ref.name.cast<Utf8>().toDartString() == 'track-list' &&
           prop.ref.format == generated.mpv_format.MPV_FORMAT_NODE) {
         final value = prop.ref.data.cast<generated.mpv_node>();
@@ -2454,6 +2474,7 @@ class NativePlayer extends PlatformPlayer {
         'cache-buffering-state': generated.mpv_format.MPV_FORMAT_DOUBLE,
         'audio-params': generated.mpv_format.MPV_FORMAT_NODE,
         'audio-bitrate': generated.mpv_format.MPV_FORMAT_DOUBLE,
+        'video-bitrate': generated.mpv_format.MPV_FORMAT_DOUBLE,
         'audio-device': generated.mpv_format.MPV_FORMAT_NODE,
         'audio-device-list': generated.mpv_format.MPV_FORMAT_NODE,
         'video-params': generated.mpv_format.MPV_FORMAT_NODE,
