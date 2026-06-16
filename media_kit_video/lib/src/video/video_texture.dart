@@ -18,6 +18,7 @@ import 'package:media_kit_video/src/utils/wakelock.dart';
 import 'package:media_kit_video/src/video_view_parameters.dart';
 import 'package:media_kit_video/src/video_controller/video_controller.dart';
 import 'package:media_kit_video/src/video_controller/platform_video_controller.dart';
+import 'package:media_kit_video/src/video/platform_view_video.dart';
 
 /// {@template video}
 ///
@@ -408,12 +409,23 @@ class VideoState extends State<Video> with WidgetsBindingObserver {
                                           children: [
                                             const SizedBox(),
                                             Positioned.fill(
-                                              child: Texture(
-                                                textureId: id,
-                                                filterQuality:
-                                                    videoViewParameters
-                                                        .filterQuality,
-                                              ),
+                                              child:
+                                                  // Check if PlatformView should be used (Android only)
+                                                  Platform.isAndroid &&
+                                                          notifier.configuration
+                                                              .usePlatformView
+                                                      ? PlatformViewVideo(
+                                                          handle: id,
+                                                          width: rect.width.toInt(),
+                                                          height: rect.height.toInt(),
+                                                          useHCPP: notifier.configuration.useHCPP,
+                                                        )
+                                                      : Texture(
+                                                          textureId: id,
+                                                          filterQuality:
+                                                              videoViewParameters
+                                                                  .filterQuality,
+                                                        ),
                                             ),
                                             // Keep the |Texture| hidden before the first frame renders. In native implementation, if no default frame size is passed (through VideoController), a starting 1 pixel sized texture/surface is created to initialize the render context & check for H/W support.
                                             // This is then resized based on the video dimensions & accordingly texture ID, texture, EGLDisplay, EGLSurface etc. (depending upon platform) are also changed. Just don't show that 1 pixel texture to the UI.

@@ -122,6 +122,19 @@ class VideoControllerConfiguration {
   /// * [vo] != gpu : `false`
   final bool? androidAttachSurfaceAfterVideoParameters;
 
+  /// Whether to use PlatformView instead of Texture for video rendering on Android.
+  ///
+  /// PlatformView provides better performance and compatibility for some use cases,
+  /// but may have limitations with certain Flutter features (e.g., transformations).
+  ///
+  /// Default: `false`
+  final bool usePlatformView;
+
+  /// Whether to use Hybrid Composition++ (HCPP) for better PlatformView rendering on Android.
+  ///
+  /// Default: `false`
+  final bool useHCPP;
+
   /// {@macro video_controller_configuration}
   const VideoControllerConfiguration({
     this.vo,
@@ -131,6 +144,8 @@ class VideoControllerConfiguration {
     this.scale = 1.0,
     this.enableHardwareAcceleration = true,
     this.androidAttachSurfaceAfterVideoParameters,
+    this.usePlatformView = false,
+    this.useHCPP = false,
   });
 
   /// Returns a copy of this class with the given fields replaced by the new values.
@@ -142,6 +157,8 @@ class VideoControllerConfiguration {
     int? height,
     bool? enableHardwareAcceleration,
     bool? androidAttachSurfaceAfterVideoParameters,
+    bool? usePlatformView,
+    bool? useHCPP,
   }) =>
       VideoControllerConfiguration(
         vo: vo ?? this.vo,
@@ -154,5 +171,7 @@ class VideoControllerConfiguration {
         androidAttachSurfaceAfterVideoParameters:
             androidAttachSurfaceAfterVideoParameters ??
                 this.androidAttachSurfaceAfterVideoParameters,
+        usePlatformView: usePlatformView ?? this.usePlatformView,
+        useHCPP: useHCPP ?? this.useHCPP,
       );
 }
