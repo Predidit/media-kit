@@ -115,6 +115,15 @@ class VideoControllerConfiguration {
   /// Default: `true`
   final bool enableHardwareAcceleration;
 
+  /// Whether to use Flutter's `SurfaceProducer` API on Android.
+  ///
+  /// This option only has effect on Android. If disabled, the Android
+  /// implementation uses the `SurfaceTexture` code path instead. The
+  /// `SurfaceTexture` code path is only effective with Android's Skia backend.
+  ///
+  /// Default: `true`
+  final bool enableAndroidSurfaceProducer;
+
   /// Whether to attach `android.view.Surface` after video parameters are known.
   ///
   /// Default:
@@ -130,6 +139,7 @@ class VideoControllerConfiguration {
     this.height,
     this.scale = 1.0,
     this.enableHardwareAcceleration = true,
+    this.enableAndroidSurfaceProducer = true,
     this.androidAttachSurfaceAfterVideoParameters,
   });
 
@@ -141,6 +151,7 @@ class VideoControllerConfiguration {
     int? width,
     int? height,
     bool? enableHardwareAcceleration,
+    bool? enableAndroidSurfaceProducer,
     bool? androidAttachSurfaceAfterVideoParameters,
   }) =>
       VideoControllerConfiguration(
@@ -151,6 +162,8 @@ class VideoControllerConfiguration {
         height: height ?? this.height,
         enableHardwareAcceleration:
             enableHardwareAcceleration ?? this.enableHardwareAcceleration,
+        enableAndroidSurfaceProducer:
+            enableAndroidSurfaceProducer ?? this.enableAndroidSurfaceProducer,
         androidAttachSurfaceAfterVideoParameters:
             androidAttachSurfaceAfterVideoParameters ??
                 this.androidAttachSurfaceAfterVideoParameters,

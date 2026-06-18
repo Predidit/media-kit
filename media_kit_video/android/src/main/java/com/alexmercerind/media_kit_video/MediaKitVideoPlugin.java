@@ -38,17 +38,22 @@ public class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHandler {
         switch (call.method) {
             case "VideoOutputManager.Create": {
                 final long handle = Long.parseLong(call.argument("handle"));
-                videoOutputManager.create(handle, (id, wid, width, height) -> channel.invokeMethod("VideoOutput.Resize", new HashMap<String, Object>() {{
-                    put("handle", handle);
-                    put("id", id);
-                    put("wid", wid);
-                    put("rect", new HashMap<String, Object>() {{
-                        put("left", 0);
-                        put("top", 0);
-                        put("width", width);
-                        put("height", height);
-                    }});
-                }}));
+                final Boolean enableSurfaceProducer = call.argument("enableSurfaceProducer");
+                videoOutputManager.create(
+                        handle,
+                        enableSurfaceProducer == null || enableSurfaceProducer,
+                        (id, wid, width, height) -> channel.invokeMethod("VideoOutput.Resize", new HashMap<String, Object>() {{
+                            put("handle", handle);
+                            put("id", id);
+                            put("wid", wid);
+                            put("rect", new HashMap<String, Object>() {{
+                                put("left", 0);
+                                put("top", 0);
+                                put("width", width);
+                                put("height", height);
+                            }});
+                        }})
+                );
                 result.success(null);
                 break;
             }

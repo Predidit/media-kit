@@ -18,6 +18,7 @@ import 'tests/09.seamless.dart';
 import 'tests/10.programmatic_fullscreen.dart';
 import 'tests/11.video_view_parameters.dart';
 import 'tests/12.video_bitrate.dart';
+import 'tests/13.android_surface_texture.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -262,6 +263,22 @@ class PrimaryScreen extends StatelessWidget {
               );
             },
           ),
+          if (UniversalPlatform.isAndroid)
+            ListTile(
+              title: const Text(
+                'android_surface_texture.dart',
+                style: TextStyle(fontSize: 14.0),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const AndroidSurfaceTextureScreen(),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );
@@ -269,7 +286,7 @@ class PrimaryScreen extends StatelessWidget {
 }
 
 class DownloadingScreen extends StatelessWidget {
-  const DownloadingScreen({Key? key}) : super(key: key);
+  const DownloadingScreen({super.key});
 
   @override
   Widget build(BuildContext context) {

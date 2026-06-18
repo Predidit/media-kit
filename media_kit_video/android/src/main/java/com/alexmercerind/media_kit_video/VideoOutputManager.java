@@ -26,11 +26,11 @@ public class VideoOutputManager {
         this.textureRegistryReference = textureRegistryReference;
     }
 
-    public void create(long handle, TextureUpdateCallback textureUpdateCallback) {
+    public void create(long handle, boolean enableSurfaceProducer, TextureUpdateCallback textureUpdateCallback) {
         synchronized (lock) {
             Log.i(TAG, String.format(Locale.ENGLISH, "com.alexmercerind.media_kit_video.VideoOutputManager.create: %d", handle));
             if (!videoOutputs.containsKey(handle)) {
-                final VideoOutput videoOutput = new VideoOutput(textureRegistryReference, textureUpdateCallback);
+                final VideoOutput videoOutput = new VideoOutput(textureRegistryReference, enableSurfaceProducer, textureUpdateCallback);
                 videoOutputs.put(handle, videoOutput);
             }
         }

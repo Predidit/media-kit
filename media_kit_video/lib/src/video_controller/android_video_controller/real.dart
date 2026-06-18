@@ -188,6 +188,7 @@ class AndroidVideoController extends PlatformVideoController {
       'VideoOutputManager.Create',
       {
         'handle': handle.toString(),
+        'enableSurfaceProducer': configuration.enableAndroidSurfaceProducer,
       },
     );
 

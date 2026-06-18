@@ -22,6 +22,24 @@
             "type": "dart"
         },
         {
+            "name": "media_kit_test (skia)",
+            "cwd": "media_kit_test",
+            "request": "launch",
+            "type": "dart",
+            "toolArgs": [
+                "--no-enable-impeller"
+            ]
+        },
+        {
+            "name": "media_kit_test (impeller)",
+            "cwd": "media_kit_test",
+            "request": "launch",
+            "type": "dart",
+            "toolArgs": [
+                "--enable-impeller"
+            ]
+        },
+        {
             "name": "media_kit_test (profile mode)",
             "cwd": "media_kit_test",
             "request": "launch",

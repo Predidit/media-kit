@@ -728,6 +728,7 @@ final VideoController player = VideoController(
   configuration: const VideoControllerConfiguration(
     // Supply your options:
     enableHardwareAcceleration: true,      // default: true
+    enableAndroidSurfaceProducer: true,    // Android only, default: true
     width: 640,                            // default: null
     height: 480,                           // default: null
     // The in-code comments is best place to know more about these options:
