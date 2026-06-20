@@ -64,11 +64,21 @@ function(check_directory_exists_and_not_empty dir result_var)
 endfunction()
 
 # libmpv archive containing the pre-built shared libraries & headers.
-set(LIBMPV "mpv-dev-x86_64-20251210-git-ad59ff1.7z")
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" LIBMPV_TARGET_PROCESSOR)
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" LIBMPV_GENERATOR_PLATFORM)
 
-# Download URL & SHA256 hash of the libmpv archive.
+if(LIBMPV_TARGET_PROCESSOR MATCHES "^(arm64|aarch64)$" OR LIBMPV_GENERATOR_PLATFORM MATCHES "^(arm64|aarch64)$")
+  set(LIBMPV_TARGET_ARM64 TRUE)
+  set(LIBMPV "mpv-dev-aarch64-20251210-git-ad59ff1.7z")
+  set(LIBMPV_SHA256 "8e3746e9d88351dd19be0e0da0c8745a089a3d07d5dd8a84c10de7f47ba88bcd")
+else()
+  set(LIBMPV_TARGET_ARM64 FALSE)
+  set(LIBMPV "mpv-dev-x86_64-20251210-git-ad59ff1.7z")
+  set(LIBMPV_SHA256 "53212bb8886d76d041ecd023a29e6213ada6fb5afedb8970610b396435833b99")
+endif()
+
+# Download URL of the libmpv archive.
 set(LIBMPV_URL "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/20251210/${LIBMPV}")
-set(LIBMPV_SHA256 "53212bb8886d76d041ecd023a29e6213ada6fb5afedb8970610b396435833b99")
 
 # Download location of the libmpv archive.
 set(LIBMPV_ARCHIVE "${CMAKE_BINARY_DIR}/${LIBMPV}")
@@ -87,14 +97,33 @@ if(NOT LIBMPV_SRC_VALID)
   message(STATUS "Extracting ${LIBMPV}...")
   make_directory("${LIBMPV_SRC}")
   add_custom_target("${PROJECT_NAME}_LIBMPV_EXTRACT" ALL)
-  add_custom_command(
-    TARGET "${PROJECT_NAME}_LIBMPV_EXTRACT"
-    COMMAND "${CMAKE_COMMAND}" -E tar xzf "\"${LIBMPV_ARCHIVE}\""
-    COMMAND xcopy "\"${LIBMPV_SRC}/include/mpv\"" "\"${LIBMPV_SRC}/mpv\"" /E /H /C /I
-    COMMAND rmdir "\"${LIBMPV_SRC}/include\"" /S /Q
-    COMMAND ren "\"${LIBMPV_SRC}/mpv\"" "\"include\""
-    WORKING_DIRECTORY "${LIBMPV_SRC}"
-  )
+  if(LIBMPV_TARGET_ARM64)
+    # CMake's built-in extractor cannot unpack the current aarch64 .7z asset
+    # on Windows ARM64 ("Unexpected codec ID: a"), so use 7-Zip for this archive.
+    find_program(LIBMPV_7Z_EXECUTABLE NAMES 7z 7za 7zr)
+
+    if(NOT LIBMPV_7Z_EXECUTABLE)
+      message(FATAL_ERROR "7z is required to extract ${LIBMPV}.")
+    endif()
+
+    add_custom_command(
+      TARGET "${PROJECT_NAME}_LIBMPV_EXTRACT"
+      COMMAND "${LIBMPV_7Z_EXECUTABLE}" x "${LIBMPV_ARCHIVE}" -y
+      COMMAND xcopy "\"${LIBMPV_SRC}/include/mpv\"" "\"${LIBMPV_SRC}/mpv\"" /E /H /C /I
+      COMMAND rmdir "\"${LIBMPV_SRC}/include\"" /S /Q
+      COMMAND ren "\"${LIBMPV_SRC}/mpv\"" "\"include\""
+      WORKING_DIRECTORY "${LIBMPV_SRC}"
+    )
+  else()
+    add_custom_command(
+      TARGET "${PROJECT_NAME}_LIBMPV_EXTRACT"
+      COMMAND "${CMAKE_COMMAND}" -E tar xzf "\"${LIBMPV_ARCHIVE}\""
+      COMMAND xcopy "\"${LIBMPV_SRC}/include/mpv\"" "\"${LIBMPV_SRC}/mpv\"" /E /H /C /I
+      COMMAND rmdir "\"${LIBMPV_SRC}/include\"" /S /Q
+      COMMAND ren "\"${LIBMPV_SRC}/mpv\"" "\"include\""
+      WORKING_DIRECTORY "${LIBMPV_SRC}"
+    )
+  endif()
 endif()
 
 # ------------------------------------------------------------------------------

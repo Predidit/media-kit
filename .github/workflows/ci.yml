@@ -117,6 +117,39 @@ jobs:
           files: |
             media_kit_test/media_kit_test_win32_x64.7z
 
+  windows-arm64:
+    name: Windows ARM64
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        working-directory: media_kit_test
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: "true"
+      - name: Set up Flutter for ARM64
+        shell: pwsh
+        run: |
+          $flutterPath = Join-Path $env:RUNNER_TEMP "flutter"
+          git clone https://github.com/flutter/flutter.git -b stable --depth 1 $flutterPath
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $flutterPath "bin")
+          & (Join-Path $flutterPath "bin\flutter.bat") --version
+      - run: flutter pub get
+      - run: flutter build windows --verbose
+      - run: cmake -E tar "cfv" "media_kit_test_win32_arm64.7z" --format=7zip "build\windows\arm64\runner\Release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media_kit_test_win32_arm64
+          path: media_kit_test/media_kit_test_win32_arm64.7z
+      - uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main'
+        with:
+          draft: true
+          prerelease: false
+          tag_name: "vnext"
+          files: |
+            media_kit_test/media_kit_test_win32_arm64.7z
+
   linux:
     name: Linux
     runs-on: ubuntu-latest
