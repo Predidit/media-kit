@@ -64,11 +64,19 @@ function(check_directory_exists_and_not_empty dir result_var)
 endfunction()
 
 # libmpv archive containing the pre-built shared libraries & headers.
-set(LIBMPV "mpv-dev-x86_64-20251210-git-ad59ff1.7z")
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" LIBMPV_TARGET_PROCESSOR)
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" LIBMPV_GENERATOR_PLATFORM)
 
-# Download URL & SHA256 hash of the libmpv archive.
-set(LIBMPV_URL "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/20251210/${LIBMPV}")
-set(LIBMPV_SHA256 "53212bb8886d76d041ecd023a29e6213ada6fb5afedb8970610b396435833b99")
+if(LIBMPV_TARGET_PROCESSOR MATCHES "^(arm64|aarch64)$" OR LIBMPV_GENERATOR_PLATFORM MATCHES "^(arm64|aarch64)$")
+  set(LIBMPV "mpv-dev-aarch64-20260623-git-ad59ff1.zip")
+  set(LIBMPV_SHA256 "381711758315b81d17df24fbb9dc4333b33b840c14fd674e264fb3306d21b7b0")
+else()
+  set(LIBMPV "mpv-dev-x86_64-20260623-git-ad59ff1.7z")
+  set(LIBMPV_SHA256 "159d7379898e2e2490ab3e0dca233daa5b7389fcd32d4cb8c420399f44284399")
+endif()
+
+# Download URL of the libmpv archive.
+set(LIBMPV_URL "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/20260623/${LIBMPV}")
 
 # Download location of the libmpv archive.
 set(LIBMPV_ARCHIVE "${CMAKE_BINARY_DIR}/${LIBMPV}")
