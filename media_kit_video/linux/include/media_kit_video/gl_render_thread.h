@@ -24,12 +24,9 @@ class GLRenderThread {
 
   // Post a task to the GL render thread
   void Post(std::function<void()> task);
-  
+
   // Post a task and wait for completion (synchronous)
   void PostAndWait(std::function<void()> task);
-  
-  // Check if we're on the GL render thread
-  bool IsCurrentThread() const;
 
  private:
   void Run();
