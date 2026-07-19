@@ -12,6 +12,8 @@
 #include <epoxy/gl.h>
 #include <epoxy/egl.h>
 #include <atomic>
+#include <mutex>
+#include <vector>
 
 #define NUM_BUFFERS 3
 
@@ -21,6 +23,7 @@ typedef struct {
   guint32 texture;          // Texture backing the FBO (mpv context)
   EGLImageKHR egl_image;    // Shares |texture| across contexts
   guint32 flutter_texture;  // Flutter-side texture bound to |egl_image|
+  EGLContext flutter_context;  // Raster context |flutter_texture| was created in
   gboolean flutter_texture_valid;
   std::atomic<EGLSyncKHR> render_sync;  // Fence from producer, consumed cross-thread
 } RenderBuffer;
@@ -62,12 +65,60 @@ struct _TextureGL {
 
 G_DEFINE_TYPE(TextureGL, texture_gl, fl_texture_gl_get_type())
 
+// GL texture names are only meaningful inside the share group that created
+// them. |flutter_texture|s are created in populate (Flutter's raster context),
+// but dispose runs on the platform thread where that context is never
+// current — deleting there would leak the real texture, or delete an
+// unrelated same-named object in GDK's own context. So dispose parks the
+// names here, tagged with their creating context, and the next populate of
+// any |TextureGL| reclaims exactly those entries whose context is current.
+// The tag is essential with multiple Flutter engines in one process: a bare
+// name must never be deleted in another engine's context.
+typedef struct {
+  EGLContext context;  // Raster context the name was created in.
+  guint32 texture;
+} RetiredTexture;
+
+static std::mutex retired_textures_mutex;
+static std::vector<RetiredTexture> retired_textures;
+
+static void retire_flutter_texture(EGLContext context, guint32 texture) {
+  std::lock_guard<std::mutex> lock(retired_textures_mutex);
+  retired_textures.push_back({context, texture});
+}
+
+// Must be called with a Flutter raster context current. Entries belonging to
+// other contexts (other engines) are left for their own populate.
+static void drain_retired_textures() {
+  EGLContext current_context = eglGetCurrentContext();
+  if (current_context == EGL_NO_CONTEXT) {
+    return;
+  }
+  std::vector<guint32> reclaimable;
+  {
+    std::lock_guard<std::mutex> lock(retired_textures_mutex);
+    auto it = retired_textures.begin();
+    while (it != retired_textures.end()) {
+      if (it->context == current_context) {
+        reclaimable.push_back(it->texture);
+        it = retired_textures.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  for (guint32 texture : reclaimable) {
+    glDeleteTextures(1, &texture);
+  }
+}
+
 static void texture_gl_init(TextureGL* self) {
   for (int i = 0; i < NUM_BUFFERS; i++) {
     self->buffers[i].fbo = 0;
     self->buffers[i].texture = 0;
     self->buffers[i].egl_image = EGL_NO_IMAGE_KHR;
     self->buffers[i].flutter_texture = 0;
+    self->buffers[i].flutter_context = EGL_NO_CONTEXT;
     self->buffers[i].flutter_texture_valid = FALSE;
     self->buffers[i].render_sync.store(EGL_NO_SYNC_KHR, std::memory_order_relaxed);
   }
@@ -90,11 +141,14 @@ static void texture_gl_dispose(GObject* object) {
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   
-  // Flutter-side textures belong to the calling (main) thread's context.
+  // Flutter-side textures belong to the raster context; park them for the
+  // next populate instead of deleting in whatever context is current here.
   for (int i = 0; i < NUM_BUFFERS; i++) {
     if (self->buffers[i].flutter_texture != 0) {
-      glDeleteTextures(1, &self->buffers[i].flutter_texture);
+      retire_flutter_texture(self->buffers[i].flutter_context,
+                             self->buffers[i].flutter_texture);
       self->buffers[i].flutter_texture = 0;
+      self->buffers[i].flutter_context = EGL_NO_CONTEXT;
     }
   }
 
@@ -306,10 +360,11 @@ void texture_gl_swap_buffers(TextureGL* self) {
   self->back_index = old_state & 0xFF;
 }
 
-// 1x1 placeholder returned while buffers are unavailable. Lives in Flutter's
-// raster context; populate is only ever called there.
+// 1x1 placeholder returned while buffers are unavailable. thread_local: each
+// engine populates from its own raster thread, so the name never leaks into
+// another engine's context.
 static guint32 get_dummy_texture() {
-  static guint32 dummy_texture = 0;
+  static thread_local guint32 dummy_texture = 0;
   if (dummy_texture == 0) {
     glGenTextures(1, &dummy_texture);
     glBindTexture(GL_TEXTURE_2D, dummy_texture);
@@ -332,6 +387,10 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   VideoOutput* video_output = self->video_output;
   GLRenderThread* gl_thread = video_output_get_gl_render_thread(video_output);
   EGLDisplay egl_display = video_output_get_egl_display(video_output);
+
+  // populate is the only place the FlTextureGL contract guarantees Flutter's
+  // raster context is current — reclaim parked texture names here.
+  drain_retired_textures();
 
   // Kick off buffer initialization on first call.
   if (!self->initialization_posted && !self->buffers_initialized) {
@@ -382,10 +441,16 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   // (Re)bind Flutter's texture to this buffer's EGLImage if invalidated.
   if (!front_buf->flutter_texture_valid && front_buf->egl_image != EGL_NO_IMAGE_KHR) {
     if (front_buf->flutter_texture != 0) {
-      glDeleteTextures(1, &front_buf->flutter_texture);
+      if (front_buf->flutter_context == eglGetCurrentContext()) {
+        glDeleteTextures(1, &front_buf->flutter_texture);
+      } else {
+        retire_flutter_texture(front_buf->flutter_context,
+                               front_buf->flutter_texture);
+      }
     }
 
     glGenTextures(1, &front_buf->flutter_texture);
+    front_buf->flutter_context = eglGetCurrentContext();
     glBindTexture(GL_TEXTURE_2D, front_buf->flutter_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -404,7 +469,7 @@ gboolean texture_gl_populate_texture(FlTextureGL* texture,
   *width = self->current_width;
   *height = self->current_height;
 
-  if (!front_buf->flutter_texture_valid || front_buf->flutter_texture == 0) {
+  if (!front_buf->flutter_texture_valid) {
     *name = get_dummy_texture();
     *width = 1;
     *height = 1;

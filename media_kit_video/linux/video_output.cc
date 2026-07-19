@@ -133,77 +133,52 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
   gboolean hardware_acceleration_supported = FALSE;
 
   if (self->configuration.enable_hardware_acceleration) {
-    // Preferred: adopt display & config of the EGL context current on this
-    // thread (GTK's own paint context on Wayland).
-    EGLDisplay flutter_display = eglGetCurrentDisplay();
-    EGLContext flutter_context = eglGetCurrentContext();
-
-    if (flutter_display != EGL_NO_DISPLAY && flutter_context != EGL_NO_CONTEXT) {
-      EGLint config_id = 0;
-      if (eglQueryContext(flutter_display, flutter_context, EGL_CONFIG_ID, &config_id)) {
-        EGLint num_configs = 0;
-        EGLint config_attribs[] = { EGL_CONFIG_ID, config_id, EGL_NONE };
-        if (eglChooseConfig(flutter_display, config_attribs, &self->egl_config, 1, &num_configs) &&
-            num_configs > 0) {
-          self->egl_display = flutter_display;
-          g_print("media_kit: VideoOutput: Got current EGL display (%p) and config (ID: %d)\n",
-                  flutter_display, config_id);
-        }
-      }
-      if (self->egl_display == EGL_NO_DISPLAY) {
-        g_printerr("media_kit: VideoOutput: Failed to query config of current EGL context.\n");
-        self->egl_config = NULL;
+    // The GTK embedder (FlOpenGLManager) renders with EGL + GLES2 on both
+    // X11 and Wayland, but its contexts are never current on the platform
+    // thread. EGL returns the same EGLDisplay for the same native display,
+    // so derive the engine's display from the GDK display — same-display is
+    // all EGLImage/EGLSync sharing requires (mpv's context is non-shared).
+    GdkDisplay* display = gdk_display_get_default();
+    EGLDisplay egl_display = EGL_NO_DISPLAY;
+    if (epoxy_has_egl_extension(EGL_NO_DISPLAY, "EGL_EXT_platform_base")) {
+      if (GDK_IS_WAYLAND_DISPLAY(display)) {
+        egl_display = eglGetPlatformDisplayEXT(
+            EGL_PLATFORM_WAYLAND_EXT, gdk_wayland_display_get_wl_display(display), NULL);
+      } else if (GDK_IS_X11_DISPLAY(display)) {
+        egl_display = eglGetPlatformDisplayEXT(
+            EGL_PLATFORM_X11_EXT, gdk_x11_display_get_xdisplay(display), NULL);
       }
     }
 
-    if (self->egl_display == EGL_NO_DISPLAY) {
-      // On X11 no EGL context is ever current on the platform thread (GDK's
-      // paint context is GLX), even though the FlOpenGLManager embedder
-      // renders with EGL + GLES2. EGL returns the same EGLDisplay for the
-      // same native display, so derive the engine's display from the GDK
-      // display — same-display is all EGLImage/EGLSync sharing requires.
-      GdkDisplay* display = gdk_display_get_default();
-      EGLDisplay platform_display = EGL_NO_DISPLAY;
-      if (epoxy_has_egl_extension(EGL_NO_DISPLAY, "EGL_EXT_platform_base")) {
-        if (GDK_IS_WAYLAND_DISPLAY(display)) {
-          platform_display = eglGetPlatformDisplayEXT(
-              EGL_PLATFORM_WAYLAND_EXT, gdk_wayland_display_get_wl_display(display), NULL);
-        } else if (GDK_IS_X11_DISPLAY(display)) {
-          platform_display = eglGetPlatformDisplayEXT(
-              EGL_PLATFORM_X11_EXT, gdk_x11_display_get_xdisplay(display), NULL);
-        }
-      }
-
-      // eglQueryString(EGL_VERSION) != NULL means the engine already
-      // initialized this display, i.e. the embedder really renders with EGL.
-      // On the legacy GLX embedder it is uninitialized; EGLImages would not
-      // be importable into a GLX raster context, so fall through to S/W.
-      if (platform_display != EGL_NO_DISPLAY &&
-          eglQueryString(platform_display, EGL_VERSION) != NULL) {
-        // mpv renders into an FBO in a surfaceless context; any GLES2 config
-        // works since it never backs an actual surface.
-        const EGLint config_attribs[] = {
-            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-            EGL_RED_SIZE, 8,
-            EGL_GREEN_SIZE, 8,
-            EGL_BLUE_SIZE, 8,
-            EGL_ALPHA_SIZE, 8,
-            EGL_NONE,
-        };
-        EGLint num_configs = 0;
-        if (eglChooseConfig(platform_display, config_attribs, &self->egl_config, 1, &num_configs) && num_configs > 0) {
-          self->egl_display = platform_display;
-          g_print("media_kit: VideoOutput: Got platform EGL display (%p) with GLES2 config.\n",
-                  platform_display);
-        } else {
-          g_printerr("media_kit: VideoOutput: Failed to choose EGL config on platform display.\n");
-          self->egl_config = NULL;
-        }
+    // eglQueryString(EGL_VERSION) != NULL means the engine already
+    // initialized this display. Otherwise this is not the EGL-based embedder
+    // (legacy GLX embedders are unsupported); fall through to S/W rendering.
+    if (egl_display != EGL_NO_DISPLAY &&
+        eglQueryString(egl_display, EGL_VERSION) != NULL) {
+      // mpv renders into an FBO in a surfaceless context; any GLES2 config
+      // works since it never backs an actual surface.
+      const EGLint config_attribs[] = {
+          EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+          EGL_RED_SIZE, 8,
+          EGL_GREEN_SIZE, 8,
+          EGL_BLUE_SIZE, 8,
+          EGL_ALPHA_SIZE, 8,
+          EGL_NONE,
+      };
+      EGLint num_configs = 0;
+      if (eglChooseConfig(egl_display, config_attribs, &self->egl_config, 1, &num_configs) &&
+          num_configs > 0) {
+        self->egl_display = egl_display;
+        g_print("media_kit: VideoOutput: Got engine EGL display (%p) with GLES2 config.\n",
+                egl_display);
       } else {
-        g_printerr(
-            "media_kit: VideoOutput: No engine-initialized EGL display "
-            "available (legacy GLX embedder?).\n");
+        g_printerr("media_kit: VideoOutput: Failed to choose EGL config.\n");
+        self->egl_config = NULL;
       }
+    } else {
+      g_printerr(
+          "media_kit: VideoOutput: H/W rendering requires the EGL-based "
+          "Flutter embedder.\n");
     }
 
     if (self->egl_display != EGL_NO_DISPLAY && self->egl_config != NULL) {
@@ -306,7 +281,6 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
   if (!hardware_acceleration_supported) {
     g_printerr("media_kit: VideoOutput: S/W rendering.\n");
     self->pixel_buffer = g_new0(guint8, SW_RENDERING_PIXEL_BUFFER_SIZE);
-    self->texture_gl = NULL;
     self->texture_sw = texture_sw_new(self);
     if (fl_texture_registrar_register_texture(texture_registrar,
                                               FL_TEXTURE(self->texture_sw))) {

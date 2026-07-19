@@ -20,7 +20,7 @@ G_DEFINE_TYPE(VideoOutputManager, video_output_manager, G_TYPE_OBJECT)
 static void video_output_manager_init(VideoOutputManager* self) {
   self->video_outputs = g_hash_table_new_full(g_direct_hash, g_direct_equal,
                                               nullptr, g_object_unref);
-  self->gl_render_thread = new GLRenderThread();  // Dedicated GL render thread
+  self->gl_render_thread = new GLRenderThread();
 }
 
 static void video_output_manager_dispose(GObject* object) {
