@@ -47,56 +47,29 @@ G_DECLARE_FINAL_TYPE(VideoOutput,
 #define VIDEO_OUTPUT(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), video_output_get_type(), VideoOutput))
 
-/**
- * @brief Creates a new |VideoOutput| instance for given |handle|.
- *
- * @param texture_registrar |FlTextureRegistrar| reference.
- * @param view |FlView| reference.
- * @param handle |mpv_handle| reference casted to gint64.
- * @param configuration Video output configuration.
- * @param gl_render_thread |GLRenderThread| reference for dedicated GL rendering.
- * @return VideoOutput*
- */
+// Creates a new |VideoOutput| for given |handle| (|mpv_handle| casted to
+// gint64). Falls back to S/W rendering if no usable EGL display is found.
 VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
-                              FlView* view,
                               gint64 handle,
                               VideoOutputConfiguration configuration,
                               GLRenderThread* gl_render_thread);
 
-/**
- * @brief Sets the callback invoked when the texture ID updates i.e. video
- * dimensions changes.
- *
- * @param self |VideoOutput| reference.
- * @param texture_update_callback Callback.
- * @param texture_update_callback_context Callback context.
- */
+// Sets the callback invoked when the texture ID updates i.e. video
+// dimensions change.
 void video_output_set_texture_update_callback(
     VideoOutput* self,
     TextureUpdateCallback texture_update_callback,
     gpointer texture_update_callback_context);
 
-/**
- * @brief Sets the required video output size. This forces |VideoOutput| to
- * resize the internal OpenGL surface / texture.
- *
- * @param texture_registrar |FlTextureRegistrar| reference.
- * @param width Preferred width of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- * @param height Preferred height of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- */
+// Sets the required video output size. Pass 0 to size the texture based on
+// the video's own resolution.
 void video_output_set_size(VideoOutput* self, gint64 width, gint64 height);
 
 mpv_render_context* video_output_get_render_context(VideoOutput* self);
 
-GdkGLContext* video_output_get_gdk_gl_context(VideoOutput* self);
-
 EGLDisplay video_output_get_egl_display(VideoOutput* self);
 
 EGLContext video_output_get_egl_context(VideoOutput* self);
-
-EGLSurface video_output_get_egl_surface(VideoOutput* self);
 
 GLRenderThread* video_output_get_gl_render_thread(VideoOutput* self);
 
@@ -110,10 +83,7 @@ gint64 video_output_get_texture_id(VideoOutput* self);
 
 void video_output_notify_texture_update(VideoOutput* self);
 
+// Schedules resize-check + render on the dedicated GL thread.
 void video_output_notify_render(VideoOutput* self);
-
-void video_output_check_and_resize(VideoOutput* self);
-
-void video_output_render(VideoOutput* self);
 
 #endif  // VIDEO_OUTPUT_H_

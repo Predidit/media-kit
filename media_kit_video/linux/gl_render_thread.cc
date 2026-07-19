@@ -66,10 +66,6 @@ void GLRenderThread::PostAndWait(std::function<void()> task) {
   wait_cv.wait(lock, [&]() { return done; });
 }
 
-bool GLRenderThread::IsCurrentThread() const {
-  return std::this_thread::get_id() == thread_id_;
-}
-
 void GLRenderThread::Run() {
   // Store thread ID
   {
