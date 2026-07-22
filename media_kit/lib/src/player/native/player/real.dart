@@ -2328,6 +2328,11 @@ class NativePlayer extends PlatformPlayer {
         // Set --vid=no by default to prevent redundant video decoding.
         // [VideoController] internally sets --vid=auto upon attachment to enable video rendering & decoding.
         if (!test) 'vid': 'no',
+        // The OSC is a built-in Lua script and may be unavailable in libmpv
+        // builds compiled without Lua. Set it as an initialization option so
+        // supported builds disable it before scripts are loaded, while builds
+        // without the option can safely ignore it.
+        if (!configuration.osc) 'osc': 'no',
       };
 
       if (Platform.isAndroid &&
@@ -2423,7 +2428,6 @@ class NativePlayer extends PlatformPlayer {
       properties.addAll(
         {
           if (!configuration.osc) ...{
-            'osc': 'no',
             'osd-level': '0',
           },
           'title': configuration.title,
