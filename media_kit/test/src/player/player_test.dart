@@ -102,6 +102,29 @@ void main() {
     },
   );
   test(
+    'player-configuration-osc-disabled-does-not-log-property-not-found',
+    () async {
+      final player = Player(
+        configuration: const PlayerConfiguration(osc: false),
+      );
+      var hasOscPropertyError = false;
+      final subscription = player.stream.log.listen((event) {
+        if (event.text.contains('_setProperty(osc')) {
+          hasOscPropertyError = true;
+        }
+      });
+
+      await player.platform?.waitForPlayerInitialization;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(hasOscPropertyError, isFalse);
+
+      await subscription.cancel();
+      await player.dispose();
+    },
+    skip: UniversalPlatform.isWeb,
+  );
+  test(
     'player-open-playable-media',
     () async {
       final player = Player();
