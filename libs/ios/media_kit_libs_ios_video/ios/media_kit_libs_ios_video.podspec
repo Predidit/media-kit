@@ -6,7 +6,7 @@ Pod::Spec.new do |s|
   system("make")
 
   s.name             = 'media_kit_libs_ios_video'
-  s.version          = '1.0.4'
+  s.version          = '1.1.5'
   s.summary          = 'iOS dependency package for package:media_kit'
   s.description      = <<-DESC
   iOS dependency package for package:media_kit.
@@ -16,8 +16,11 @@ Pod::Spec.new do |s|
   s.author           = { 'Hitesh Kumar Saini' => 'saini123hitesh@gmail.com' }
 
   s.source           = { :path => '.' }
-  s.source_files     = 'Classes/**/*'
+  s.source_files     = 'media_kit_libs_ios_video/Sources/media_kit_libs_ios_video/**/*.swift'
   s.dependency 'Flutter'
+  s.resource_bundles = {
+    'media_kit_libs_ios_video_privacy' => ['media_kit_libs_ios_video/Sources/media_kit_libs_ios_video/PrivacyInfo.xcprivacy']
+  }
 
   s.vendored_frameworks = 'Frameworks/*.xcframework'
 

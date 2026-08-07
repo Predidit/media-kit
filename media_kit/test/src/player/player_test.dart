@@ -1065,6 +1065,9 @@ void main() {
       // Wait for EOF.
       await completer.future;
 
+      // NOTE: VOLUNTARY DELAY.
+      await Future.delayed(const Duration(seconds: 5));
+
       final expectPosition = expectAsync1(
         (value) {
           print(value);
@@ -1080,9 +1083,6 @@ void main() {
         print(event);
         expectPosition(event);
       });
-
-      // NOTE: VOLUNTARY DELAY.
-      await Future.delayed(const Duration(seconds: 5));
 
       // Begin test.
 
@@ -3993,7 +3993,7 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit.
         },
       );
       expect(
-        (player.platform as dynamic).observed.containsKey(property),
+        (player.platform as dynamic).observedProperties.containsKey(property),
         isTrue,
       );
 
@@ -4004,7 +4004,7 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit.
 
       await (player.platform as dynamic).unobserveProperty(property);
       expect(
-        (player.platform as dynamic).observed.containsKey(property),
+        (player.platform as dynamic).observedProperties.containsKey(property),
         isFalse,
       );
 

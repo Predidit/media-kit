@@ -332,9 +332,11 @@ gboolean texture_gl_render(TextureGL* self) {
   // Render mpv frame to back buffer's texture
   mpv_opengl_fbo fbo{(gint32)back_buf->fbo, required_width, required_height, 0};
   int flip_y = 0;
+  int block_for_target_time = 0;
   mpv_render_param params[] = {
       {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
       {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+      {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block_for_target_time},
       {MPV_RENDER_PARAM_INVALID, NULL},
   };
   mpv_render_context_render(render_context, params);
