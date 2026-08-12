@@ -44,18 +44,6 @@ class OhosVideoController extends PlatformVideoController {
     }
   }
 
-  /// Listener for updating the --wid property.
-  Future<void> widListener() {
-    return lock.synchronized(() async {
-      final widValue = wid.value?.toString() ?? '0';
-      await setProperties({'wid': widValue});
-      // Instead of seeking to the start (Duration.zero), seek to the current playback position
-      // without jumping the user to the start of the media.
-      final currentPosition = player.state.position;
-      await player.seek(currentPosition);
-    });
-  }
-
   /// [StreamSubscription] for listening to video [Rect].
   StreamSubscription<VideoParams>? videoParamsSubscription;
 
@@ -64,7 +52,6 @@ class OhosVideoController extends PlatformVideoController {
     super.player,
     super.configuration,
   ) {
-    wid.addListener(widListener);
     videoParamsSubscription = player.stream.videoParams.listen(
       (event) => lock.synchronized(() async {
         final int width;
@@ -157,26 +144,48 @@ class OhosVideoController extends PlatformVideoController {
     // Store the [VideoController] in the [_controllers].
     _controllers[handle] = controller;
 
-    await _channel.invokeMethod(
+    final Map<dynamic, dynamic>? data = await _channel.invokeMethod(
       'VideoOutputManager.Create',
       {
         'handle': handle.toString(),
       },
     );
 
-    await controller.setProperties(
-      {
-        'vo': configuration.vo!,
-        'hwdec': configuration.hwdec!,
-        'vid': 'auto',
-        'force-window': 'yes',
-        'sub-use-margins': 'no',
-        'sub-scale-with-window': 'no',
-        'osd-font': 'HarmonyOS Sans SC',
-      },
+    if (data == null) {
+      throw StateError('[OhosVideoController] failed to create video output.');
+    }
+
+    final id = (data['id'] as num).toInt();
+    final wid = (data['wid'] as num).toInt();
+    final rect = Rect.fromLTWH(
+      (data['rect']['left'] as num).toDouble(),
+      (data['rect']['top'] as num).toDouble(),
+      (data['rect']['width'] as num).toDouble(),
+      (data['rect']['height'] as num).toDouble(),
     );
 
-    await controller.setProperties({'ohos-surface-size': '1x1'});
+    controller.id.value = id;
+    controller.rect.value = rect;
+    controller.wid.value = wid;
+
+    await controller.lock.synchronized(() async {
+      // MPV's HarmonyOS video output requires a valid surface ID before the
+      // GPU video output is initialized.
+      await controller.setProperty('vo', 'null');
+      await controller.setProperties(
+        {
+          'ohos-surface-size': '${rect.width.toInt()}x${rect.height.toInt()}',
+          'wid': wid.toString(),
+          'hwdec': configuration.hwdec!,
+          'vid': 'auto',
+          'force-window': 'yes',
+          'sub-use-margins': 'no',
+          'sub-scale-with-window': 'no',
+          'osd-font': 'HarmonyOS Sans SC',
+        },
+      );
+      await controller.setProperty('vo', configuration.vo!);
+    });
 
     // Return the [PlatformVideoController].
     return controller;
@@ -200,9 +209,6 @@ class OhosVideoController extends PlatformVideoController {
 
   /// Disposes the instance. Releases allocated resources back to the system.
   Future<void> _dispose() async {
-    super.dispose();
-    wid.dispose();
-    wid.removeListener(widListener);
     await videoParamsSubscription?.cancel();
     final handle = await player.handle;
     _controllers.remove(handle);
@@ -212,46 +218,13 @@ class OhosVideoController extends PlatformVideoController {
         'handle': handle.toString(),
       },
     );
+    wid.dispose();
+    super.dispose();
   }
 
   /// Currently created [OhosVideoController]s.
   static final _controllers = HashMap<int, OhosVideoController>();
 
   /// [MethodChannel] for invoking platform specific native implementation.
-  static final _channel =
-      const MethodChannel('com.alexmercerind/media_kit_video')
-        ..setMethodCallHandler(
-          (MethodCall call) async {
-            try {
-              debugPrint(call.method.toString());
-              debugPrint(call.arguments.toString());
-              switch (call.method) {
-                case 'VideoOutput.Resize':
-                  {
-                    // Notify about updated texture ID & [Rect].
-                    final int handle = call.arguments['handle'];
-                    final Rect rect = Rect.fromLTWH(
-                      call.arguments['rect']['left'] * 1.0,
-                      call.arguments['rect']['top'] * 1.0,
-                      call.arguments['rect']['width'] * 1.0,
-                      call.arguments['rect']['height'] * 1.0,
-                    );
-                    final int id = call.arguments['id'];
-                    final int wid = call.arguments['wid'];
-                    _controllers[handle]?.rect.value = rect;
-                    _controllers[handle]?.id.value = id;
-                    _controllers[handle]?.wid.value = wid;
-                    break;
-                  }
-                default:
-                  {
-                    break;
-                  }
-              }
-            } catch (exception, stacktrace) {
-              debugPrint(exception.toString());
-              debugPrint(stacktrace.toString());
-            }
-          },
-        );
+  static const _channel = MethodChannel('com.alexmercerind/media_kit_video');
 }

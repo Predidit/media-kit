@@ -26,51 +26,23 @@ G_DECLARE_FINAL_TYPE(VideoOutputManager,
                               VideoOutputManager))
 
 VideoOutputManager* video_output_manager_new(
-    FlTextureRegistrar* texture_registrar,
-    FlView* view);
+    FlTextureRegistrar* texture_registrar);
 
-/**
- * @brief Creates a new |VideoOutput| instance for given |handle|.
- *
- * @param self |VideoOutputManager| reference.
- * @param handle |mpv_handle| reference casted to gint64.
- * @param width Preferred width of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- * @param height Preferred height of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- * @param enable_hardware_acceleration Whether to enable hardware acceleration.
- * @param texture_update_callback Callback invoked when the texture ID updates
- * i.e. video dimensions changes.
- * @param texture_update_callback_context Context passed to
- * |texture_update_callback|.
- */
+// Creates a new |VideoOutput| instance for given |handle|.
 void video_output_manager_create(VideoOutputManager* self,
                                  gint64 handle,
                                  VideoOutputConfiguration configuration,
                                  TextureUpdateCallback texture_update_callback,
                                  gpointer texture_update_callback_context);
 
-/**
- * @brief Sets the required video output size. This forces |VideoOutput| to
- * resize the internal OpenGL surface / texture.
- *
- * @param texture_registrar |FlTextureRegistrar| reference.
- * @param width Preferred width of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- * @param height Preferred height of the video. Pass `NULL` for using texture
- * dimensions based on video's resolution.
- */
+// Sets the required video output size. Pass 0 to size the texture based on
+// the video's own resolution.
 void video_output_manager_set_size(VideoOutputManager* self,
                                    gint64 handle,
                                    gint64 width,
                                    gint64 height);
 
-/**
- * @brief Disposes |VideoOutput| instance for given |handle|.
- *
- * @param self |VideoOutputManager| reference.
- * @param handle |mpv_handle| reference casted to gint64.
- */
+// Disposes |VideoOutput| instance for given |handle|.
 void video_output_manager_dispose(VideoOutputManager* self, gint64 handle);
 
 #endif

@@ -8,8 +8,8 @@
 
 import Log from '@ohos/flutter_ohos/src/main/ets/util/Log';
 import { SurfaceTextureEntry } from '@ohos/flutter_ohos';
-import { TextureUpdateCallback } from './TextureUpdateCallback';
 import { TextureRegistry } from '@ohos/flutter_ohos';
+import { SizeData } from './Utils';
 
 const TAG = "VideoOutput";
 
@@ -18,28 +18,36 @@ export class VideoOutput {
   private wid: number = 0;
   private w: number = 0;
   private h: number = 0;
-  private textureUpdateCallback: TextureUpdateCallback;
   private textureRegistry: TextureRegistry;
   private surfaceProducer: SurfaceTextureEntry;
+  private disposed: boolean = false;
 
-  constructor(textureRegistry: TextureRegistry, surfaceProducer: SurfaceTextureEntry,
-    textureUpdateCallback: TextureUpdateCallback) {
+  constructor(textureRegistry: TextureRegistry, surfaceProducer: SurfaceTextureEntry) {
     this.surfaceProducer = surfaceProducer;
-    this.textureUpdateCallback = textureUpdateCallback;
     this.textureRegistry = textureRegistry;
-    this.setSurfaceSize(0, 0, true);
+    this.id = this.surfaceProducer.getTextureId();
+    this.wid = this.surfaceProducer.getSurfaceId();
+    this.setSurfaceSize(1, 1, true);
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+
     try {
-      this.surfaceProducer.release();
-      this.onSurfaceDestroyed();
+      this.textureRegistry.unregisterTexture(this.id);
+      this.disposed = true;
+      this.id = 0;
+      this.wid = 0;
+      this.w = 0;
+      this.h = 0;
     } catch (e) {
       Log.e(TAG, `dispose: ${e}`);
     }
   }
 
-  async setSurfaceSize(width: number, height: number, force: boolean = false): Promise<void> {
+  setSurfaceSize(width: number, height: number, force: boolean = false): void {
     try {
       if (!force && this.w == width && this.h == height) {
         return;
@@ -48,26 +56,22 @@ export class VideoOutput {
       this.w = width;
       this.h = height;
       this.textureRegistry.setTextureBufferSize(this.id, width, height);
-      this.onSurfaceCreated();
     } catch (e) {
       Log.e(TAG, `setSurfaceSize error: ${e}`);
     }
   }
 
-  private async onSurfaceCreated(): Promise<void> {
-    Log.i(TAG, "onSurfaceCreated");
-    try {
-      this.id = this.surfaceProducer.getTextureId();
-      this.wid = this.surfaceProducer.getSurfaceId();
-      this.textureUpdateCallback.onTextureUpdate(this.id, this.wid, this.w, this.h);
-    } catch (e) {
-      Log.e(TAG, `onSurfaceCreated error: ${e}`);
+  getSizeData(handle: number): SizeData {
+    return {
+      handle: handle,
+      id: this.id,
+      wid: this.wid,
+      rect: {
+        left: 0,
+        top: 0,
+        width: this.w,
+        height: this.h,
+      },
     }
-  }
-
-  private async onSurfaceDestroyed(): Promise<void> {
-    Log.i(TAG, "onSurfaceDestroyed");
-    this.textureUpdateCallback.onTextureUpdate(this.id, 0, 0, 0);
-    this.surfaceProducer.release();
   }
 }

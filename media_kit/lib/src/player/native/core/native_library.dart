@@ -65,6 +65,7 @@ abstract class NativeLibrary {
         'libmpv.so',
       ],
       'ohos': [
+        'libmpv.so',
         'libmpv.so.2',
       ],
     }[Platform.operatingSystem];
@@ -92,7 +93,7 @@ abstract class NativeLibrary {
             'android':
                 'Cannot find libmpv.so. Please ensure it\'s presence in the APK.',
             'ohos':
-                'Cannot find libmpv.so.2. Please ensure it\'s presence in the HAP.',
+                'Cannot find libmpv. Please ensure it\'s presence in the HAP.',
           }[Platform.operatingSystem]!,
         );
       }

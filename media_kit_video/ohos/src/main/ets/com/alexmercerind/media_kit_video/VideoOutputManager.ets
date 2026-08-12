@@ -9,8 +9,7 @@
 import Log from '@ohos/flutter_ohos/src/main/ets/util/Log';
 import { TextureRegistry } from '@ohos/flutter_ohos';
 import { VideoOutput } from './VideoOutput';
-import { TextureUpdateCallback } from './TextureUpdateCallback';
-import { common } from '@kit.AbilityKit';
+import { SizeData } from './Utils';
 
 const TAG = "VideoOutputManager";
 
@@ -22,19 +21,20 @@ export class VideoOutputManager {
     this.textureRegistryReference = textureRegistryReference;
   }
 
-  async create(handle: number, textureUpdateCallback: TextureUpdateCallback): Promise<void> {
+  create(handle: number): SizeData {
     Log.i(TAG, `com.alexmercerind.media_kit_video.VideoOutputManager.create: ${handle}`);
 
     if (!this.videoOutputs.has(handle)) {
       const textureId = this.textureRegistryReference.getTextureId();
       const videoOutput =
-        new VideoOutput(this.textureRegistryReference, this.textureRegistryReference.registerTexture(textureId),
-          textureUpdateCallback);
+        new VideoOutput(this.textureRegistryReference, this.textureRegistryReference.registerTexture(textureId));
       this.videoOutputs.set(handle, videoOutput);
     }
+
+    return this.videoOutputs.get(handle)!.getSizeData(handle);
   }
 
-  async dispose(handle: number): Promise<void> {
+  dispose(handle: number): void {
     Log.i(TAG, `com.alexmercerind.media_kit_video.VideoOutputManager.dispose: ${handle}`);
 
     if (this.videoOutputs.has(handle)) {
@@ -43,7 +43,14 @@ export class VideoOutputManager {
     }
   }
 
-  async setSurfaceSize(handle: number, width: number, height: number): Promise<void> {
+  disposeAll(): void {
+    this.videoOutputs.forEach((videoOutput: VideoOutput) => {
+      videoOutput.dispose();
+    });
+    this.videoOutputs.clear();
+  }
+
+  setSurfaceSize(handle: number, width: number, height: number): void {
     Log.i(TAG, `com.alexmercerind.media_kit_video.VideoOutputManager.setSurfaceSize: ${handle} ${width} ${height}`);
 
     if (this.videoOutputs.has(handle)) {

@@ -12,8 +12,7 @@ struct _VideoOutputManager {
   GObject parent_instance;
   GHashTable* video_outputs;
   FlTextureRegistrar* texture_registrar;
-  FlView* view;
-  GLRenderThread* gl_render_thread;
+  GLRenderThread* gl_render_thread; /* Shared by all |VideoOutput|s. */
 };
 
 G_DEFINE_TYPE(VideoOutputManager, video_output_manager, G_TYPE_OBJECT)
@@ -21,7 +20,7 @@ G_DEFINE_TYPE(VideoOutputManager, video_output_manager, G_TYPE_OBJECT)
 static void video_output_manager_init(VideoOutputManager* self) {
   self->video_outputs = g_hash_table_new_full(g_direct_hash, g_direct_equal,
                                               nullptr, g_object_unref);
-  self->gl_render_thread = new GLRenderThread();  // Dedicated GL render thread
+  self->gl_render_thread = new GLRenderThread();
 }
 
 static void video_output_manager_dispose(GObject* object) {
@@ -36,12 +35,10 @@ static void video_output_manager_class_init(VideoOutputManagerClass* klass) {
 }
 
 VideoOutputManager* video_output_manager_new(
-    FlTextureRegistrar* texture_registrar,
-    FlView* view) {
+    FlTextureRegistrar* texture_registrar) {
   VideoOutputManager* video_output_manager = VIDEO_OUTPUT_MANAGER(
       g_object_new(video_output_manager_get_type(), nullptr));
   video_output_manager->texture_registrar = texture_registrar;
-  video_output_manager->view = view;
   return video_output_manager;
 }
 
@@ -52,7 +49,7 @@ void video_output_manager_create(VideoOutputManager* self,
                                  gpointer texture_update_callback_context) {
   if (!g_hash_table_contains(self->video_outputs, GINT_TO_POINTER(handle))) {
     g_autoptr(VideoOutput) video_output = video_output_new(
-        self->texture_registrar, self->view, handle, configuration, self->gl_render_thread);
+        self->texture_registrar, handle, configuration, self->gl_render_thread);
     video_output_set_texture_update_callback(
         video_output, texture_update_callback, texture_update_callback_context);
     g_hash_table_insert(self->video_outputs, GINT_TO_POINTER(handle),

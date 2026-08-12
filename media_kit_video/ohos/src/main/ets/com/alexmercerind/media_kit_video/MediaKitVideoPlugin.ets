@@ -16,8 +16,7 @@ import {
   AbilityAware,
   AbilityPluginBinding
 } from '@ohos/flutter_ohos';
-import { TextureUpdateCallback } from './TextureUpdateCallback';
-import { Rect, SizeData, Utils } from './Utils';
+import { Utils } from './Utils';
 import { VideoOutputManager } from './VideoOutputManager';
 import { common } from '@kit.AbilityKit';
 
@@ -33,7 +32,9 @@ export default class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHan
   }
 
   onDetachedFromAbility(): void {
-    return;
+    this.videoOutputManager?.disposeAll();
+    this.videoOutputManager = null;
+    this.context = null;
   }
 
   getUniqueClassName(): string {
@@ -50,31 +51,21 @@ export default class MediaKitVideoPlugin implements FlutterPlugin, MethodCallHan
     if (this.channel != null) {
       this.channel.setMethodCallHandler(null);
     }
+    this.videoOutputManager?.disposeAll();
+    this.videoOutputManager = null;
+    this.channel = null;
+    this.binding = null;
   }
 
   onMethodCall(call: MethodCall, result: MethodResult): void {
     switch (call.method) {
       case "VideoOutputManager.Create": {
         const handle = parseInt(call.argument("handle"));
-        const textureUpdateCallback: TextureUpdateCallback = {
-          onTextureUpdate: (id: number, wid: number, width: number, height: number): void => {
-            const rect: Rect = {
-              left: 0,
-              top: 0,
-              width: width,
-              height: height,
-            }
-            const args: SizeData = {
-              handle: handle,
-              id: id,
-              wid: wid,
-              rect: rect,
-            }
-            this.channel?.invokeMethod("VideoOutput.Resize", args);
-          }
+        if (this.videoOutputManager == null) {
+          result.error("unavailable", "VideoOutputManager is not attached to an ability.", null);
+          break;
         }
-        this.videoOutputManager?.create(handle, textureUpdateCallback);
-        result.success(null);
+        result.success(this.videoOutputManager.create(handle));
         break;
       }
       case "VideoOutputManager.SetSurfaceSize": {

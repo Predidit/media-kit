@@ -12,17 +12,15 @@
 #include "include/media_kit_video/gl_render_thread.h"
 
 #include <epoxy/egl.h>
-#include <epoxy/glx.h>
 #include <gdk/gdkwayland.h>
 #include <gdk/gdkx.h>
 
 struct _VideoOutput {
   GObject parent_instance;
   TextureGL* texture_gl;
-  EGLDisplay egl_display; /* EGL display for mpv rendering (shared with flutter). */
-  EGLConfig egl_config;   /* EGL config from Flutter (for compatibility). */
-  EGLContext egl_context; /* Isolated EGL context (non-shared). */
-  EGLSurface egl_surface; /* Place holder surface for activating egl context */
+  EGLDisplay egl_display; /* Same EGLDisplay the Flutter engine renders on. */
+  EGLConfig egl_config;
+  EGLContext egl_context; /* Isolated (non-shared) context for mpv. */
   guint8* pixel_buffer;
   TextureSW* texture_sw;
   GMutex mutex; /* Only used in S/W rendering. */
@@ -43,7 +41,7 @@ G_DEFINE_TYPE(VideoOutput, video_output, G_TYPE_OBJECT)
 static void video_output_dispose(GObject* object) {
   VideoOutput* self = VIDEO_OUTPUT(object);
   self->destroyed = TRUE;
-  
+
   // Make sure that no more callbacks are invoked from mpv.
   if (self->render_context) {
     mpv_render_context_set_update_callback(self->render_context, NULL, NULL);
@@ -53,11 +51,10 @@ static void video_output_dispose(GObject* object) {
   if (self->texture_gl) {
     fl_texture_registrar_unregister_texture(self->texture_registrar,
                                             FL_TEXTURE(self->texture_gl));
-    
-    // Clean up EGL resources in dedicated GL thread
+
+    // EGL resources must be released in the dedicated GL thread.
     if (self->render_context != NULL || self->egl_context != EGL_NO_CONTEXT) {
       self->gl_render_thread->PostAndWait([self]() {
-        // Free mpv_render_context with our isolated EGL context
         if (self->render_context != NULL) {
           if (self->egl_context != EGL_NO_CONTEXT) {
             eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, self->egl_context);
@@ -65,15 +62,13 @@ static void video_output_dispose(GObject* object) {
           mpv_render_context_free(self->render_context);
           self->render_context = NULL;
         }
-        
-        // Clean up EGL context
         if (self->egl_context != EGL_NO_CONTEXT) {
           eglDestroyContext(self->egl_display, self->egl_context);
           self->egl_context = EGL_NO_CONTEXT;
         }
       });
     }
-    
+
     g_object_unref(self->texture_gl);
   }
   // S/W
@@ -101,7 +96,6 @@ static void video_output_init(VideoOutput* self) {
   self->egl_display = EGL_NO_DISPLAY;
   self->egl_config = NULL;
   self->egl_context = EGL_NO_CONTEXT;
-  self->egl_surface = EGL_NO_SURFACE;
   self->texture_sw = NULL;
   self->pixel_buffer = NULL;
   self->handle = NULL;
@@ -118,7 +112,6 @@ static void video_output_init(VideoOutput* self) {
 }
 
 VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
-                              FlView* view,
                               gint64 handle,
                               VideoOutputConfiguration configuration,
                               GLRenderThread* gl_render_thread) {
@@ -138,46 +131,65 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
 #endif
   
   gboolean hardware_acceleration_supported = FALSE;
-  
-  // Get EGL display and config in main thread (where Flutter context is available)
-  // Only attempt if hardware acceleration is enabled
+
   if (self->configuration.enable_hardware_acceleration) {
-    EGLDisplay flutter_display = eglGetCurrentDisplay();
-    EGLContext flutter_context = eglGetCurrentContext();
-    
-    if (flutter_display != EGL_NO_DISPLAY && flutter_context != EGL_NO_CONTEXT) {
-      self->egl_display = flutter_display;
-      
-      // Get Flutter's EGL config by querying its context
-      EGLint config_id = 0;
-      if (eglQueryContext(flutter_display, flutter_context, EGL_CONFIG_ID, &config_id)) {
-        // Retrieve the actual EGLConfig from the config ID
-        EGLint num_configs = 0;
-        EGLint config_attribs[] = { EGL_CONFIG_ID, config_id, EGL_NONE };
-        
-        if (eglChooseConfig(flutter_display, config_attribs, &self->egl_config, 1, &num_configs) && num_configs > 0) {
-          g_print("media_kit: VideoOutput: Got Flutter's EGL display (%p) and config (ID: %d)\n", 
-                  flutter_display, config_id);
-          
-          // Create texture_gl in main thread (needed by mpv callback)
-          self->texture_gl = texture_gl_new(self);
-          if (!fl_texture_registrar_register_texture(
-                  texture_registrar, FL_TEXTURE(self->texture_gl))) {
-            g_printerr("media_kit: VideoOutput: Failed to register texture.\n");
-            g_object_unref(self->texture_gl);
-            self->texture_gl = NULL;
-            self->egl_config = NULL;
-          }
-        } else {
-          g_printerr("media_kit: VideoOutput: Failed to get Flutter's EGL config by ID.\n");
-          self->egl_config = NULL;
-        }
+    // The GTK embedder (FlOpenGLManager) renders with EGL + GLES2 on both
+    // X11 and Wayland, but its contexts are never current on the platform
+    // thread. EGL returns the same EGLDisplay for the same native display,
+    // so derive the engine's display from the GDK display — same-display is
+    // all EGLImage/EGLSync sharing requires (mpv's context is non-shared).
+    GdkDisplay* display = gdk_display_get_default();
+    EGLDisplay egl_display = EGL_NO_DISPLAY;
+    if (epoxy_has_egl_extension(EGL_NO_DISPLAY, "EGL_EXT_platform_base")) {
+      if (GDK_IS_WAYLAND_DISPLAY(display)) {
+        egl_display = eglGetPlatformDisplayEXT(
+            EGL_PLATFORM_WAYLAND_EXT, gdk_wayland_display_get_wl_display(display), NULL);
+      } else if (GDK_IS_X11_DISPLAY(display)) {
+        egl_display = eglGetPlatformDisplayEXT(
+            EGL_PLATFORM_X11_EXT, gdk_x11_display_get_xdisplay(display), NULL);
+      }
+    }
+
+    // eglQueryString(EGL_VERSION) != NULL means the engine already
+    // initialized this display. Otherwise this is not the EGL-based embedder
+    // (legacy GLX embedders are unsupported); fall through to S/W rendering.
+    if (egl_display != EGL_NO_DISPLAY &&
+        eglQueryString(egl_display, EGL_VERSION) != NULL) {
+      // mpv renders into an FBO in a surfaceless context; any GLES2 config
+      // works since it never backs an actual surface.
+      const EGLint config_attribs[] = {
+          EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+          EGL_RED_SIZE, 8,
+          EGL_GREEN_SIZE, 8,
+          EGL_BLUE_SIZE, 8,
+          EGL_ALPHA_SIZE, 8,
+          EGL_NONE,
+      };
+      EGLint num_configs = 0;
+      if (eglChooseConfig(egl_display, config_attribs, &self->egl_config, 1, &num_configs) &&
+          num_configs > 0) {
+        self->egl_display = egl_display;
+        g_print("media_kit: VideoOutput: Got engine EGL display (%p) with GLES2 config.\n",
+                egl_display);
       } else {
-        g_printerr("media_kit: VideoOutput: Failed to query Flutter's EGL config ID.\n");
+        g_printerr("media_kit: VideoOutput: Failed to choose EGL config.\n");
         self->egl_config = NULL;
       }
     } else {
-      g_printerr("media_kit: VideoOutput: Failed to get Flutter's EGL display or context.\n");
+      g_printerr(
+          "media_kit: VideoOutput: H/W rendering requires the EGL-based "
+          "Flutter embedder.\n");
+    }
+
+    if (self->egl_display != EGL_NO_DISPLAY && self->egl_config != NULL) {
+      self->texture_gl = texture_gl_new(self);
+      if (!fl_texture_registrar_register_texture(
+              texture_registrar, FL_TEXTURE(self->texture_gl))) {
+        g_printerr("media_kit: VideoOutput: Failed to register texture.\n");
+        g_object_unref(self->texture_gl);
+        self->texture_gl = NULL;
+        self->egl_config = NULL;
+      }
     }
   }
   
@@ -187,45 +199,38 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
     // Causes frame drops with `pulse` audio output. (SlotSun/dart_simple_live#42)
     // mpv_set_option_string(self->handle, "video-timing-offset", "0");
     
-    if (self->texture_gl != NULL && 
-        self->egl_display != EGL_NO_DISPLAY && 
+    if (self->texture_gl != NULL &&
+        self->egl_display != EGL_NO_DISPLAY &&
         self->egl_config != NULL) {
-      
-      // Bind OpenGL ES API (Flutter uses OpenGL ES on Linux)
       eglBindAPI(EGL_OPENGL_ES_API);
-      
-      // Create an isolated EGL context using Flutter's config
-      // Using the SAME egl_display and egl_config as Flutter for maximum compatibility
+
+      // Isolated (non-shared) GLES2 context; frames are shared with Flutter
+      // via EGLImage on the same display, not via context share lists.
       const EGLint context_attribs[] = {
           EGL_CONTEXT_CLIENT_VERSION, 2,
           EGL_NONE
       };
-      
-      self->egl_context = eglCreateContext(self->egl_display, self->egl_config, 
+      self->egl_context = eglCreateContext(self->egl_display, self->egl_config,
                                            EGL_NO_CONTEXT, context_attribs);
-      
+
       if (self->egl_context != EGL_NO_CONTEXT) {
-        g_print("media_kit: VideoOutput: Created isolated EGL context: %p (display: %p, using Flutter's config)\n", 
-                self->egl_context, self->egl_display);
-        
-        // Make our isolated context current for initialization (surfaceless)
+        // Surfaceless: mpv only ever renders into FBOs.
         if (eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, self->egl_context)) {
-          // Initialize mpv with our isolated EGL context
           mpv_opengl_init_params gl_init_params{
               [](auto, auto name) {
                 return (void*)eglGetProcAddress(name);
               },
               NULL,
           };
-          
+
           mpv_render_param params[] = {
               {MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL},
               {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, (void*)&gl_init_params},
               {MPV_RENDER_PARAM_INVALID, (void*)0},
               {MPV_RENDER_PARAM_INVALID, (void*)0},
           };
-          
-          // VAAPI acceleration requires passing X11/Wayland display
+
+          // VAAPI acceleration requires passing X11/Wayland display.
           GdkDisplay* display = gdk_display_get_default();
           if (GDK_IS_WAYLAND_DISPLAY(display)) {
             params[2].type = MPV_RENDER_PARAM_WL_DISPLAY;
@@ -234,7 +239,7 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
             params[2].type = MPV_RENDER_PARAM_X11_DISPLAY;
             params[2].data = gdk_x11_display_get_xdisplay(display);
           }
-          
+
           if (mpv_render_context_create(&self->render_context, self->handle, params) == 0) {
             mpv_render_context_set_update_callback(
                 self->render_context,
@@ -243,7 +248,7 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                   if (self->destroyed) {
                     return;
                   }
-                  // Asynchronously notify render (don't block mpv thread)
+                  // Asynchronous: must not block mpv's thread.
                   video_output_notify_render(self);
                 },
                 self);
@@ -263,11 +268,8 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
         g_printerr("media_kit: VideoOutput: Failed to create isolated EGL context. Error: 0x%x\n", eglGetError());
       }
     }
-    // If hardware acceleration is not supported or disabled, fall back to software rendering
   });
-  // hardware_acceleration_supported is already set by the lambda
-  
-  // If hardware acceleration failed and texture was created, clean it up
+
   if (!hardware_acceleration_supported && self->texture_gl != NULL) {
     fl_texture_registrar_unregister_texture(texture_registrar, 
                                             FL_TEXTURE(self->texture_gl));
@@ -275,11 +277,10 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
     self->texture_gl = NULL;
   }
 #ifdef MPV_RENDER_API_TYPE_SW
+  // H/W rendering unavailable; fall back to S/W rendering.
   if (!hardware_acceleration_supported) {
     g_printerr("media_kit: VideoOutput: S/W rendering.\n");
-    // H/W rendering failed. Fallback to S/W rendering.
     self->pixel_buffer = g_new0(guint8, SW_RENDERING_PIXEL_BUFFER_SIZE);
-    self->texture_gl = NULL;
     self->texture_sw = texture_sw_new(self);
     if (fl_texture_registrar_register_texture(texture_registrar,
                                               FL_TEXTURE(self->texture_sw))) {
@@ -381,10 +382,6 @@ EGLContext video_output_get_egl_context(VideoOutput* self) {
   return self->egl_context;
 }
 
-EGLSurface video_output_get_egl_surface(VideoOutput* self) {
-  return self->egl_surface;
-}
-
 GLRenderThread* video_output_get_gl_render_thread(VideoOutput* self) {
   return self->gl_render_thread;
 }
@@ -393,16 +390,10 @@ guint8* video_output_get_pixel_buffer(VideoOutput* self) {
   return self->pixel_buffer;
 }
 
-gint64 video_output_get_width(VideoOutput* self) {
-  // Fixed width.
-  if (self->width) {
-    return self->width;
-  }
-
-  // Video resolution dependent width.
-  gint64 width = 0;
-  gint64 height = 0;
-
+// Reads rotation-corrected display dimensions from mpv's video-out-params.
+static void video_output_get_video_dimensions(VideoOutput* self,
+                                              gint64* out_width,
+                                              gint64* out_height) {
   mpv_node params;
   mpv_get_property(self->handle, "video-out-params", MPV_FORMAT_NODE, &params);
 
@@ -426,12 +417,22 @@ gint64 video_output_get_width(VideoOutput* self) {
     mpv_free_node_contents(&params);
   }
 
-  width = rotate == 0 || rotate == 180 ? dw : dh;
-  height = rotate == 0 || rotate == 180 ? dh : dw;
+  *out_width = rotate == 0 || rotate == 180 ? dw : dh;
+  *out_height = rotate == 0 || rotate == 180 ? dh : dw;
+}
+
+gint64 video_output_get_width(VideoOutput* self) {
+  // Fixed width.
+  if (self->width) {
+    return self->width;
+  }
+
+  gint64 width = 0;
+  gint64 height = 0;
+  video_output_get_video_dimensions(self, &width, &height);
 
   if (self->texture_sw != NULL) {
-    // Make sure |width| & |height| fit between |SW_RENDERING_MAX_WIDTH| &
-    // |SW_RENDERING_MAX_HEIGHT| while maintaining aspect ratio.
+    // Clamp to S/W rendering limits while maintaining aspect ratio.
     if (width >= SW_RENDERING_MAX_WIDTH) {
       return SW_RENDERING_MAX_WIDTH;
     }
@@ -449,39 +450,12 @@ gint64 video_output_get_height(VideoOutput* self) {
     return self->height;
   }
 
-  // Video resolution dependent height.
   gint64 width = 0;
   gint64 height = 0;
-
-  mpv_node params;
-  mpv_get_property(self->handle, "video-out-params", MPV_FORMAT_NODE, &params);
-
-  int64_t dw = 0, dh = 0, rotate = 0;
-  if (params.format == MPV_FORMAT_NODE_MAP) {
-    for (int32_t i = 0; i < params.u.list->num; i++) {
-      char* key = params.u.list->keys[i];
-      auto value = params.u.list->values[i];
-      if (value.format == MPV_FORMAT_INT64) {
-        if (strcmp(key, "dw") == 0) {
-          dw = value.u.int64;
-        }
-        if (strcmp(key, "dh") == 0) {
-          dh = value.u.int64;
-        }
-        if (strcmp(key, "rotate") == 0) {
-          rotate = value.u.int64;
-        }
-      }
-    }
-    mpv_free_node_contents(&params);
-  }
-
-  width = rotate == 0 || rotate == 180 ? dw : dh;
-  height = rotate == 0 || rotate == 180 ? dh : dw;
+  video_output_get_video_dimensions(self, &width, &height);
 
   if (self->texture_sw != NULL) {
-    // Make sure |width| & |height| fit between |SW_RENDERING_MAX_WIDTH| &
-    // |SW_RENDERING_MAX_HEIGHT| while maintaining aspect ratio.
+    // Clamp to S/W rendering limits while maintaining aspect ratio.
     if (height >= SW_RENDERING_MAX_HEIGHT) {
       return SW_RENDERING_MAX_HEIGHT;
     }
@@ -516,52 +490,41 @@ void video_output_notify_texture_update(VideoOutput* self) {
   }
 }
 
-void video_output_notify_render(VideoOutput* self) {
-  if (self->destroyed || !self->gl_render_thread) {
-    return;
-  }
-  // Post combined check_and_resize + render task to GL thread (asynchronously)
-  self->gl_render_thread->Post([self]() {
-    video_output_check_and_resize(self);
-    video_output_render(self);
-  });
-}
-
-void video_output_check_and_resize(VideoOutput* self) {
+// Both run in the dedicated GL thread.
+static void video_output_check_and_resize(VideoOutput* self) {
   if (self->destroyed || !self->texture_gl) {
     return;
   }
-  
-  TextureGL* texture = self->texture_gl;
+
   gint64 required_width = video_output_get_width(self);
   gint64 required_height = video_output_get_height(self);
-  
   if (required_width < 1 || required_height < 1) {
     return;
   }
-  
-  // Check if resize is needed through texture_gl
-  texture_gl_check_and_resize(texture, required_width, required_height);
+
+  texture_gl_check_and_resize(self->texture_gl, required_width, required_height);
 }
 
-void video_output_render(VideoOutput* self) {
+static void video_output_render(VideoOutput* self) {
   if (self->destroyed) {
     return;
   }
-  
-  // H/W rendering with triple buffering
+
   if (self->texture_gl && self->render_context) {
-    // Render to write buffer
-    gboolean rendered = texture_gl_render(self->texture_gl);
-    
-    // Only swap and notify if rendering was actually performed
-    if (rendered) {
-      // Publish the rendered frame (update buffer indices)
+    if (texture_gl_render(self->texture_gl)) {
       texture_gl_swap_buffers(self->texture_gl);
-      
-      // Notify Flutter that a new frame is available
       fl_texture_registrar_mark_texture_frame_available(
           self->texture_registrar, FL_TEXTURE(self->texture_gl));
     }
   }
+}
+
+void video_output_notify_render(VideoOutput* self) {
+  if (self->destroyed || !self->gl_render_thread) {
+    return;
+  }
+  self->gl_render_thread->Post([self]() {
+    video_output_check_and_resize(self);
+    video_output_render(self);
+  });
 }

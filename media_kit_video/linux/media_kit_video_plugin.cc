@@ -183,10 +183,9 @@ static MediaKitVideoPlugin* media_kit_video_plugin_new(
                                             g_object_unref);
   FlTextureRegistrar* texture_registrar =
       fl_plugin_registrar_get_texture_registrar(registrar);
-  FlView* view = fl_plugin_registrar_get_view(registrar);
-  self->view = view;
-  self->video_output_manager =
-      video_output_manager_new(texture_registrar, view);
+  // |view| is only needed for native fullscreen handling.
+  self->view = fl_plugin_registrar_get_view(registrar);
+  self->video_output_manager = video_output_manager_new(texture_registrar);
   return self;
 }
 
