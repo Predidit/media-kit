@@ -42,16 +42,8 @@ package:video_player_media_kit allows [package:video_player](https://pub.dev/pac
 
 ```yaml
 dependencies:
-  video_player_media_kit: ^1.0.5
-
-  # NOTE:
-  # It is not necessary to select all.
-  # Select based on your usage:
-  media_kit_libs_android_video: any
-  media_kit_libs_ios_video: any
-  media_kit_libs_macos_video: any
-  media_kit_libs_windows_video: any
-  media_kit_libs_linux: any
+  video_player_media_kit:
+    path: ../media-kit/video_player_media_kit
 ```
 
 ## TL;DR
@@ -61,11 +53,11 @@ A quick usage example.
 ```dart
 void main() {
   VideoPlayerMediaKit.ensureInitialized(
-    android: true,          // default: false    -    dependency: media_kit_libs_android_video
-    iOS: true,              // default: false    -    dependency: media_kit_libs_ios_video
-    macOS: true,            // default: false    -    dependency: media_kit_libs_macos_video
-    windows: true,          // default: false    -    dependency: media_kit_libs_windows_video
-    linux: true,            // default: false    -    dependency: media_kit_libs_linux
+    android: true,          // default: false
+    iOS: true,              // default: false
+    macOS: true,            // default: false
+    windows: true,          // default: false
+    linux: true,            // default: false
   );
 
   // USE package:video_player NORMALLY!
@@ -73,9 +65,8 @@ void main() {
 }
 ```
 
-**Notes:**
-
-- The corresponding `media_kit_libs_***` package for a platform must be added if enabled in `VideoPlayerMediaKit.ensureInitialized`.
+Native playback binaries are supplied by the core build hook. Use this checkout
+or a revision containing the migration; see the [native build requirements](../media_kit/doc/native_assets.md).
 
 ## License
 

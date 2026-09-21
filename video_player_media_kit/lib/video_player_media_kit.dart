@@ -20,9 +20,6 @@ import 'package:video_player_media_kit/src/media_kit_video_player.dart';
 ///   // Make sure to add the respective packages to pubspec.yaml. e.g.
 ///   //
 ///   // dependencies:
-///   //   media_kit_libs_macos_video: any
-///   //   media_kit_libs_windows_video: any
-///   //   media_kit_libs_linux: any
 ///   VideoPlayerMediaKit.ensureInitialized(
 ///     macOS: true,
 ///     windows: true,

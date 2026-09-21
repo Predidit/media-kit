@@ -61,10 +61,10 @@ public class TextureSW: NSObject, FlutterTexture, ResizableTextureProtocol {
     ]
 
     MPVHelpers.checkError(
-      mpv_render_context_create(&renderContext, handle, &params)
+      media_kit_mpv_render_context_create(&renderContext, handle, &params)
     )
 
-    mpv_render_context_set_update_callback(
+    media_kit_mpv_render_context_set_update_callback(
       renderContext,
       { (ctx) in
         let that = unsafeBitCast(ctx, to: TextureSW.self)
@@ -77,8 +77,8 @@ public class TextureSW: NSObject, FlutterTexture, ResizableTextureProtocol {
   }
 
   private func disposeMPV() {
-    mpv_render_context_set_update_callback(renderContext, nil, nil)
-    mpv_render_context_free(renderContext)
+    media_kit_mpv_render_context_set_update_callback(renderContext, nil, nil)
+    media_kit_mpv_render_context_free(renderContext)
   }
 
   public func resize(_ size: CGSize) {
@@ -147,7 +147,7 @@ public class TextureSW: NSObject, FlutterTexture, ResizableTextureProtocol {
       mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
     ]
 
-    mpv_render_context_render(renderContext, &params)
+    media_kit_mpv_render_context_render(renderContext, &params)
 
     textureContexts.pushAsReady(textureContext!)
   }

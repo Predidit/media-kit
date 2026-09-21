@@ -1,3 +1,6 @@
+#if SWIFT_PACKAGE
+  import Mpv
+#endif
 #if canImport(Flutter)
   import Flutter
 #elseif canImport(FlutterMacOS)
@@ -71,6 +74,12 @@ public class MediaKitVideoPlugin: NSObject, FlutterPlugin {
     _ result: FlutterResult
   ) {
     let args = arguments as? [String: Any]
+    guard let library = args?["libmpv"] as? String,
+      library.withCString({ media_kit_mpv_initialize($0) }) == 0
+    else {
+      result(FlutterError(code: "libmpv", message: "Could not bind the player's libmpv library.", details: nil))
+      return
+    }
     let handleStr = args?["handle"] as! String
     let handle: Int64? = Int64(handleStr)
     let configDict = args?["configuration"] as! [String: Any]
