@@ -71,8 +71,22 @@ public class VideoOutput: NSObject {
 
   public func setSize(width: Int64?, height: Int64?) {
     worker.enqueue {
+      guard !self.disposed else { return }
       self.width = width
       self.height = height
+    }
+  }
+
+  public func dispose(completion: @escaping () -> Void) {
+    // Drain rendering on its worker without blocking the platform thread,
+    // which pending render jobs may still need for texture notifications.
+    worker.enqueue {
+      self.disposed = true
+      self.texture?.dispose()
+      self.disposeTextureId {
+        self.worker.cancel()
+        completion()
+      }
     }
   }
 
@@ -134,13 +148,16 @@ public class VideoOutput: NSObject {
     textureUpdateCallback(textureId, CGSize(width: 0, height: 0))
   }
 
-  private func disposeTextureId() {
+  private func disposeTextureId(completion: @escaping () -> Void = {}) {
     let registry_ = self.registry
     let textureId_ = self.textureId
     textureId = -1
     DispatchQueue.main.async {
       // Textures must be unregistered on the platform thread
-      registry_.unregisterTexture(textureId_)
+      if textureId_ >= 0 {
+        registry_.unregisterTexture(textureId_)
+      }
+      completion()
     }
   }
 
@@ -151,6 +168,7 @@ public class VideoOutput: NSObject {
   }
 
   private func _updateCallback() {
+    guard !disposed else { return }
     let size = videoSize
 
     if size.width == 0 || size.height == 0 {
