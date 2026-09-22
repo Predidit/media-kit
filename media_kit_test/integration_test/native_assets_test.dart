@@ -8,7 +8,10 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  // Native textures and VideoController initialization request frames between
+  // explicit pumps. Keep those frames flowing throughout the integration test.
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized().framePolicy =
+      LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
   MediaKit.ensureInitialized();
 
   for (final hardware in [false, true]) {
@@ -36,7 +39,7 @@ void main() {
         }
         await file.writeAsBytes(data.buffer.asUint8List());
         try {
-          for (var iteration = 0; iteration < 4; iteration++) {
+          for (var iteration = 0; iteration < 10; iteration++) {
             final player = Player();
             final controller = VideoController(
               player,
@@ -76,6 +79,7 @@ void main() {
           await directory.delete(recursive: true);
         }
       },
+      timeout: const Timeout(Duration(minutes: 2)),
     );
   }
 }
