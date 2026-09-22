@@ -28,7 +28,8 @@ void main() {
         await file.writeAsBytes(image.encodePng(frame));
         try {
           for (var iteration = 0; iteration < 10; iteration++) {
-            final player = Player();
+            final player = Player(configuration: const PlayerConfiguration(logLevel: MPVLogLevel.debug));
+            final logSubscription = player.stream.log.listen((log) => print('MPV: $log'));
             final controller = VideoController(
               player,
               configuration: VideoControllerConfiguration(
@@ -67,6 +68,7 @@ void main() {
                 () => player.dispose().timeout(const Duration(seconds: 15)),
               );
             }
+            await logSubscription.cancel();
             expect((player.platform! as NativePlayer).ctx.address, 0);
           }
         } finally {
