@@ -32,6 +32,8 @@ jobs:
           submodules: "true"
       - run: sudo apt-get update
       - run: sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev libepoxy-dev dpkg-dev p7zip-full p7zip-rar
+      - name: Install libmpv runtime dependencies
+        run: sudo apt-get install -y libva-drm2 libva-x11-2 libva-wayland2 libvdpau1 libpulse0 libxss1 libxv1 libegl1 libgbm1 libwayland-egl1
       - uses: subosito/flutter-action@v2
         with:
           channel: "stable"
@@ -68,12 +70,56 @@ jobs:
         working-directory: media_kit/tool/lifecycle_test
     steps:
       - uses: actions/checkout@v4
+      - name: Install libmpv runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libva-drm2 libva-x11-2 libva-wayland2 libvdpau1 libpulse0 libxss1 libxv1 libegl1 libgbm1 libwayland-egl1
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
       - run: flutter pub get
       - run: flutter test --reporter expanded
+
+  native-video-integration:
+    name: Desktop video integration (${{ matrix.device }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            device: windows
+          - os: ubuntu-latest
+            device: linux
+          - os: macos-latest
+            device: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: media_kit_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "true"
+      - name: Install Linux build and runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libepoxy-dev xvfb libgl1-mesa-dri libva-drm2 libva-x11-2 libva-wayland2 libvdpau1 libpulse0 libxss1 libxv1 libegl1 libgbm1 libwayland-egl1
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Test native video rendering and disposal
+        if: runner.os != 'Linux'
+        run: flutter test integration_test/native_assets_test.dart -d ${{ matrix.device }} --reporter expanded
+        timeout-minutes: 10
+      - name: Test native video rendering and disposal under Xvfb
+        if: runner.os == 'Linux'
+        run: xvfb-run -a flutter test integration_test/native_assets_test.dart -d linux --reporter expanded
+        timeout-minutes: 10
 
   media_kit-tests-web:
     name: package:media_kit tests (Web)
@@ -111,7 +157,6 @@ jobs:
           channel: "stable"
           cache: true
       - run: flutter pub get
-      - run: flutter test integration_test/native_assets_test.dart -d windows --reporter expanded
       - run: flutter build windows --verbose
       - run: cmake -E tar "cfv" "media_kit_test_win32_x64.7z" --format=7zip "build\windows\x64\runner\Release"
       - uses: actions/upload-artifact@v4
