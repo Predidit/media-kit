@@ -35,11 +35,11 @@ void main() {
     text(36, 'data');
     data.setUint32(40, 19200, Endian.little);
     await File(source).writeAsBytes(data.buffer.asUint8List());
-    // PNG is enabled in every bundled mpv build; BMP is not.
-    picture = '${directory.path}/frame.png';
+    // Every video bundle enables MJPEG; some omit BMP and PNG decoders.
+    picture = '${directory.path}/frame.jpg';
     final frame = image.Image(width: 32, height: 32);
     image.fill(frame, color: image.ColorRgb8(200, 40, 80));
-    await File(picture).writeAsBytes(image.encodePng(frame));
+    await File(picture).writeAsBytes(image.encodeJpg(frame));
   });
   tearDownAll(() => directory.delete(recursive: true));
 

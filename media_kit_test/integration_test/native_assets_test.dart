@@ -21,11 +21,11 @@ void main() {
         final directory = await Directory.systemTemp.createTemp(
           'media-kit-video-',
         );
-        final file = File('${directory.path}/frame.png');
-        // Generate a local frame in a format supported by every mpv bundle.
+        final file = File('${directory.path}/frame.jpg');
+        // Every video bundle enables MJPEG; some omit BMP and PNG decoders.
         final frame = image.Image(width: 32, height: 32);
         image.fill(frame, color: image.ColorRgb8(200, 40, 80));
-        await file.writeAsBytes(image.encodePng(frame));
+        await file.writeAsBytes(image.encodeJpg(frame));
         try {
           for (var iteration = 0; iteration < 10; iteration++) {
             final player = Player();
@@ -46,26 +46,22 @@ void main() {
                     ),
                   )
                   .timeout(const Duration(seconds: 15));
-              await tester.runAsync(() async {
-                final loaded = player.stream.width.firstWhere(
-                  (width) => width == 32,
-                );
-                await player
-                    .open(Media(file.path))
-                    .timeout(const Duration(seconds: 15));
-                await loaded.timeout(const Duration(seconds: 15));
-                await controller.waitUntilFirstFrameRendered.timeout(
-                  const Duration(seconds: 15),
-                );
-                expect(controller.id.value, isNotNull);
-              });
+              final loaded = player.stream.width.firstWhere(
+                (width) => width == 32,
+              );
+              await player
+                  .open(Media(file.path))
+                  .timeout(const Duration(seconds: 15));
+              await loaded.timeout(const Duration(seconds: 15));
+              await controller.waitUntilFirstFrameRendered.timeout(
+                const Duration(seconds: 15),
+              );
+              expect(controller.id.value, isNotNull);
             } finally {
               await tester
                   .pumpWidget(const SizedBox.shrink())
                   .timeout(const Duration(seconds: 15));
-              await tester.runAsync(
-                () => player.dispose().timeout(const Duration(seconds: 15)),
-              );
+              await player.dispose().timeout(const Duration(seconds: 15));
             }
             expect((player.platform! as NativePlayer).ctx.address, 0);
           }
