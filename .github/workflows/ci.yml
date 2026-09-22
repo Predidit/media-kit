@@ -21,4 +21,6 @@ jobs:
       - name: Collect application crash reports
         if: always()
         run: |
+          sleep 5
+          log show --last 3m --style compact --predicate 'process == "media_kit_test"' || true
           find ~/Library/Logs/DiagnosticReports -name '*media_kit*' -type f -print -exec cat {} \; || true
