@@ -32,6 +32,8 @@ jobs:
           submodules: "true"
       - run: sudo apt-get update
       - run: sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev libepoxy-dev dpkg-dev p7zip-full p7zip-rar
+      - name: Install libmpv runtime dependencies
+        run: sudo apt-get install -y libva-drm2 libva-x11-2 libva-wayland2 libvdpau1 libpulse0 libxss1 libxv1
       - uses: subosito/flutter-action@v2
         with:
           channel: "stable"
@@ -68,6 +70,11 @@ jobs:
         working-directory: media_kit/tool/lifecycle_test
     steps:
       - uses: actions/checkout@v4
+      - name: Install libmpv runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libva-drm2 libva-x11-2 libva-wayland2 libvdpau1 libpulse0 libxss1 libxv1
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
