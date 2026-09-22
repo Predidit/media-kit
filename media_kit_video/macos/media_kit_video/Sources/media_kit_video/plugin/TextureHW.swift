@@ -20,15 +20,25 @@ public class TextureHW: NSObject, FlutterTexture, ResizableTextureProtocol {
     skipCheckArgs: true
   )
 
-  init(
+  init?(
     handle: OpaquePointer,
     updateCallback: @escaping UpdateCallback
   ) {
+    guard let pixelFormat = OpenGLHelpers.createPixelFormat() else { return nil }
+    guard let context = OpenGLHelpers.createContext(pixelFormat) else {
+      OpenGLHelpers.deletePixelFormat(pixelFormat)
+      return nil
+    }
+    guard let textureCache = OpenGLHelpers.createTextureCache(context, pixelFormat) else {
+      OpenGLHelpers.deleteContext(context)
+      OpenGLHelpers.deletePixelFormat(pixelFormat)
+      return nil
+    }
     self.handle = handle
     self.updateCallback = updateCallback
-    self.pixelFormat = OpenGLHelpers.createPixelFormat()
-    self.context = OpenGLHelpers.createContext(pixelFormat)
-    self.textureCache = OpenGLHelpers.createTextureCache(context, pixelFormat)
+    self.pixelFormat = pixelFormat
+    self.context = context
+    self.textureCache = textureCache
 
     super.init()
 

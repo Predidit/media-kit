@@ -104,30 +104,26 @@ public class VideoOutput: NSObject {
       )
     }
 
+    let update: () -> Void = { [weak self] in
+      self?.updateCallback()
+    }
+    var hardwareTexture: ResizableTextureProtocol?
     if enableHardwareAcceleration {
-      texture = SafeResizableTexture(
-        TextureHW(
-          handle: handle,
-          // Use `weak self` to prevent memory leaks
-          updateCallback: { [weak self]() in
-            guard let that = self else {
-              return
-            }
-            that.updateCallback()
-          }
-        )
+      hardwareTexture = TextureHW(
+        handle: handle,
+        updateCallback: update
       )
+    }
+    if let hardwareTexture = hardwareTexture {
+      texture = SafeResizableTexture(hardwareTexture)
     } else {
+      if enableHardwareAcceleration {
+        NSLog("VideoOutput: hardware rendering unavailable; using software rendering")
+      }
       texture = SafeResizableTexture(
         TextureSW(
           handle: handle,
-          // Use `weak self` to prevent memory leaks
-          updateCallback: { [weak self]() in
-            guard let that = self else {
-              return
-            }
-            that.updateCallback()
-          }
+          updateCallback: update
         )
       )
     }
