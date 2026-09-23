@@ -35,9 +35,9 @@ dependencies:
   archive: ^4.0.0
   crypto: ^3.0.3
   xml: ^6.5.0
-  code_assets: ^1.0.0
-  hooks: ^1.0.3
-  native_toolchain_c: ^0.17.6
+  code_assets: ^2.1.0
+  hooks: ^2.2.0
+  native_toolchain_c: ^0.19.5
   collection: ^1.17.0
   http: ">=0.13.0 <2.0.0"
   image: ^4.0.17
