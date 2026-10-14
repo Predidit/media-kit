@@ -71,7 +71,6 @@ D3D11Renderer::~D3D11Renderer() {
   readback_texture_.Reset();
   flutter_mailbox_swap_chain_.Reset();
   render_mailbox_swap_chain_.Reset();
-  flutter_device_context_.Reset();
   flutter_device_.Reset();
   d3d_11_device_context_.Reset();
   d3d_11_device_.Reset();
@@ -211,9 +210,10 @@ bool D3D11Renderer::CreateMailbox() {
     return true;
   }
 
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> flutter_device_context;
   if (!flutter_adapter_ ||
       !CreateD3D11Device(flutter_adapter_.Get(), flutter_device_,
-                         flutter_device_context_)) {
+                         flutter_device_context)) {
     return false;
   }
 

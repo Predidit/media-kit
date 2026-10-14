@@ -156,9 +156,7 @@ class VideoControllerConfiguration {
     this.windowsD3D11AdapterId,
     this.enableAndroidSurfaceProducer = true,
     this.androidAttachSurfaceAfterVideoParameters,
-  }) : assert(
-         windowsD3D11AdapterId == null || windowsD3D11AdapterId.isNotEmpty,
-       );
+  });
 
   /// Returns a copy of this class with the given fields replaced by the new values.
   VideoControllerConfiguration copyWith({

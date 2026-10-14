@@ -89,7 +89,6 @@ class D3D11Renderer {
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
   Microsoft::WRL::ComPtr<IDXGIAdapter> flutter_adapter_;
   Microsoft::WRL::ComPtr<ID3D11Device> flutter_device_;
-  Microsoft::WRL::ComPtr<ID3D11DeviceContext> flutter_device_context_;
   Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_texture_;
   Microsoft::WRL::ComPtr<MailboxSwapChain> render_mailbox_swap_chain_;
   Microsoft::WRL::ComPtr<MailboxSwapChain> flutter_mailbox_swap_chain_;
