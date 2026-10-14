@@ -13,6 +13,7 @@ import 'package:media_kit_video/src/video_controller/native_video_controller/nat
 import 'package:media_kit_video/src/video_controller/android_video_controller/android_video_controller.dart';
 import 'package:media_kit_video/src/video_controller/ohos_video_controller/ohos_video_controller.dart';
 import 'package:media_kit_video/src/video_controller/web_video_controller/web_video_controller.dart';
+import 'package:media_kit_video/src/windows_d3d11_adapter.dart';
 
 /// {@template video_controller}
 ///
@@ -43,6 +44,13 @@ import 'package:media_kit_video/src/video_controller/web_video_controller/web_vi
 ///
 /// **Platform specific limitations & differences:**
 ///
+/// **Windows**
+/// * [VideoControllerConfiguration.windowsD3D11AdapterId] selects the D3D11
+///   render adapter. Use [VideoController.getAvailableWindowsD3D11Adapters]
+///   to list current adapters. A stale ID falls back to Auto and is reported
+///   through [VideoController.windowsVideoOutputErrors].
+/// * Rendering on a different adapter copies frames through system memory.
+///
 /// **Android**
 /// * [VideoControllerConfiguration.width] & [VideoControllerConfiguration.height] arguments have no effect.
 ///
@@ -54,6 +62,21 @@ import 'package:media_kit_video/src/video_controller/web_video_controller/web_vi
 ///
 /// {@endtemplate}
 class VideoController {
+  /// Returns the current Windows hardware D3D11 adapters.
+  ///
+  /// This method is only supported on Windows.
+  static Future<List<WindowsD3D11Adapter>>
+      getAvailableWindowsD3D11Adapters() {
+    return NativeVideoController.getAvailableWindowsD3D11Adapters();
+  }
+
+  /// Errors reported by the Windows native video renderer.
+  ///
+  /// Subscribe before creating a [VideoController] to receive initialization
+  /// warnings such as a saved adapter ID that is no longer available.
+  static Stream<WindowsVideoOutputError> get windowsVideoOutputErrors =>
+      NativeVideoController.windowsVideoOutputErrors;
+
   /// The [Player] instance associated with this [VideoController].
   final Player player;
 

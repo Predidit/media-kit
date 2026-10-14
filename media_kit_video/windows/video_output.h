@@ -10,13 +10,16 @@
 #define VIDEO_OUTPUT_H_
 
 #include <atomic>
+#include <functional>
 #include <optional>
+#include <string>
 
 #include "media_kit_mpv.h"
 #include "mpv/render_dxgi.h"
 
 #include <future>
 #include <memory>
+#include <utility>
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
@@ -29,13 +32,18 @@ typedef struct _VideoOutputConfiguration {
   std::optional<int64_t> width;
   std::optional<int64_t> height;
   bool enable_hardware_acceleration;
+  std::optional<std::string> windows_d3d11_adapter_id;
 
   _VideoOutputConfiguration(std::optional<int64_t> width = std::nullopt,
                             std::optional<int64_t> height = std::nullopt,
-                            bool enable_hardware_acceleration = true)
+                            bool enable_hardware_acceleration = true,
+                            std::optional<std::string>
+                                windows_d3d11_adapter_id = std::nullopt)
       : width(width),
         height(height),
-        enable_hardware_acceleration(enable_hardware_acceleration) {}
+        enable_hardware_acceleration(enable_hardware_acceleration),
+        windows_d3d11_adapter_id(
+            std::move(windows_d3d11_adapter_id)) {}
 } VideoOutputConfiguration;
 
 class VideoOutput {
@@ -67,7 +75,8 @@ class VideoOutput {
   VideoOutput(int64_t handle,
               VideoOutputConfiguration configuration,
               flutter::PluginRegistrarWindows* registrar,
-              ThreadPool* thread_pool_ref);
+              ThreadPool* thread_pool_ref,
+              std::function<void(std::string)> error_callback);
 
   ~VideoOutput();
 
@@ -85,6 +94,10 @@ class VideoOutput {
 
   void Resize(int64_t required_width, int64_t required_height);
 
+  bool HasExplicitWindowsAdapter() const;
+
+  void ReportRendererError(const std::string& message);
+
   int64_t GetVideoWidth();
 
   int64_t GetVideoHeight();
@@ -98,6 +111,8 @@ class VideoOutput {
   int64_t texture_id_ = 0;
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   ThreadPool* thread_pool_ref_ = nullptr;
+  std::function<void(std::string)> error_callback_;
+  bool renderer_transfer_failed_ = false;
   // Stop queued callbacks before draining and freeing their borrowed resources.
   std::atomic<bool> destroyed_{false};
 

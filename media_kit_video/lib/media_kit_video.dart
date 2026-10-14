@@ -6,6 +6,7 @@
 
 export 'package:media_kit_video/src/video_controller/platform_video_controller.dart';
 export 'package:media_kit_video/src/video_controller/video_controller.dart';
+export 'package:media_kit_video/src/windows_d3d11_adapter.dart';
 export 'package:media_kit_video/src/video_view_parameters.dart';
 export 'package:media_kit_video/src/video/video.dart';
 

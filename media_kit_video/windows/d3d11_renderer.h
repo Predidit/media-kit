@@ -17,24 +17,15 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 
 #include "mailbox_swap_chain.h"
 #include "utils.h"
 
-// D3D11Renderer creates a D3D11 device and owns a MailboxSwapChain that
-// implements the lock-free triple-buffer mailbox between the libmpv rendering
-// thread (producer) and Flutter's render thread (consumer).
-//
-// The MailboxSwapChain is passed directly to mpv as the IDXGISwapChain* in
-// mpv_dxgi_init_params.  mpv calls GetBuffer(0, ...) to obtain a render
-// target and submits GPU work into it.  The plugin then calls
-// ProducerCommit(), which (a) signals a fence on the submitted work,
-// (b) non-blockingly checks the *previous* frame's fence and, if already
-// GPU-complete, promotes it to latest_completed_slot_, and (c) atomically
-// publishes write_slot_ as the new pending frame.  Flutter's
-// GpuSurfaceTexture callback calls ConsumerAcquire() — a single acquire
-// load of latest_completed_slot_ — to receive the DXGI shared HANDLE of
-// the newest confirmed frame, with no copy, no flush, and no OS lock.
+// D3D11Renderer keeps mpv rendering on the selected adapter. If that differs
+// from Flutter's adapter, frames are read back to system memory and uploaded
+// to a separate mailbox on Flutter's adapter; shared DXGI handles never cross
+// adapter boundaries.
 class D3D11Renderer {
  public:
   int32_t width() const { return width_; }
@@ -43,28 +34,31 @@ class D3D11Renderer {
   // Raw device pointer used by VideoOutput to populate mpv_dxgi_init_params.
   ID3D11Device* device() const { return d3d_11_device_.Get(); }
 
-  // IDXGISwapChain* facade backed by MailboxSwapChain.
+  // IDXGISwapChain* facade backed by the render adapter's mailbox.
   // Passed to mpv as mpv_dxgi_init_params::swapchain (void*).
-  IDXGISwapChain* swap_chain() const { return mailbox_swap_chain_.Get(); }
+  IDXGISwapChain* swap_chain() const {
+    return render_mailbox_swap_chain_.Get();
+  }
 
-  // |flutter_adapter| is the IDXGIAdapter* returned by
-  // FlutterDesktopViewGetGraphicsAdapter.  When non-null the D3D11 device is
-  // created on exactly that adapter so the plugin always shares the same GPU
-  // as the Flutter compositor.  Pass nullptr to fall back to the legacy
-  // heuristic (hardware default on Win10+, adapter 0 on older Windows).
+  // A null selected_adapter_id keeps the existing Flutter-adapter path.
+  // A non-null ID is resolved against the current DXGI enumeration. Missing
+  // IDs fall back to Auto and are reported through adapter_selection_fallback.
   explicit D3D11Renderer(int32_t width, int32_t height,
-                         IDXGIAdapter* flutter_adapter = nullptr);
+                         IDXGIAdapter* flutter_adapter = nullptr,
+                         std::string selected_adapter_id = {});
   ~D3D11Renderer();
+
+  bool adapter_selection_fallback() const {
+    return adapter_selection_fallback_;
+  }
 
   // Recreates the three mailbox slots at the new dimensions.
   // Must be called from the producer thread only.
   void SetSize(int32_t width, int32_t height);
 
-  // Called from the producer thread (mpv thread pool) after
-  // mpv_render_context_render returns.  Signals the frame fence, then
-  // non-blockingly attempts to promote the previous pending frame to
-  // latest_completed_slot_, and finally publishes the new pending frame.
-  void ProducerCommit();
+  // Called from the producer thread after mpv_render_context_render returns.
+  // Returns false if frame transfer or publication fails.
+  bool ProducerCommit();
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
   // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame
@@ -77,16 +71,28 @@ class D3D11Renderer {
   HANDLE ReadHandleSnapshot() const;
 
  private:
-  bool CreateD3D11Device(IDXGIAdapter* flutter_adapter);
+  bool CreateD3D11Device(
+      IDXGIAdapter* adapter,
+      Microsoft::WRL::ComPtr<ID3D11Device>& device,
+      Microsoft::WRL::ComPtr<ID3D11DeviceContext>& context);
   bool CreateMailbox();
+  bool CreateReadbackTexture();
+  bool TransferFrameToFlutterAdapter();
 
   int32_t width_ = 1;
   int32_t height_ = 1;
+  bool cross_adapter_ = false;
+  bool cross_adapter_ready_ = false;
+  bool adapter_selection_fallback_ = false;
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
-
-  Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> flutter_adapter_;
+  Microsoft::WRL::ComPtr<ID3D11Device> flutter_device_;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> flutter_device_context_;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_texture_;
+  Microsoft::WRL::ComPtr<MailboxSwapChain> render_mailbox_swap_chain_;
+  Microsoft::WRL::ComPtr<MailboxSwapChain> flutter_mailbox_swap_chain_;
 
   static int instance_count_;
 };

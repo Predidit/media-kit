@@ -8,10 +8,108 @@
 
 #include "utils.h"
 
+#include <iomanip>
+#include <sstream>
+#include <utility>
+
 typedef LONG NTSTATUS, *PNTSTATUS;
 #define STATUS_SUCCESS (0x00000000)
 
 typedef NTSTATUS(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+
+std::string Utils::D3D11AdapterId(const LUID& luid) {
+  std::ostringstream id;
+  id << std::hex << std::setfill('0') << std::setw(8)
+     << static_cast<uint32_t>(luid.HighPart) << ':' << std::setw(8)
+     << luid.LowPart;
+  return id.str();
+}
+
+std::vector<D3D11AdapterInfo> Utils::GetD3D11Adapters() {
+  std::vector<D3D11AdapterInfo> adapters;
+  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+  if (FAILED(::CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  reinterpret_cast<void**>(
+                                      factory.GetAddressOf()))) ||
+      !factory) {
+    return adapters;
+  }
+
+  for (UINT index = 0;; ++index) {
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    const HRESULT hr = factory->EnumAdapters1(index, adapter.GetAddressOf());
+    if (hr == DXGI_ERROR_NOT_FOUND) {
+      break;
+    }
+    if (FAILED(hr)) {
+      return {};
+    }
+    if (!adapter) {
+      continue;
+    }
+
+    DXGI_ADAPTER_DESC1 description = {};
+    if (FAILED(adapter->GetDesc1(&description)) ||
+        (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+      continue;
+    }
+
+    const int name_length = ::WideCharToMultiByte(
+        CP_UTF8, 0, description.Description, -1, nullptr, 0, nullptr, nullptr);
+    if (name_length <= 1) {
+      continue;
+    }
+    std::string name(static_cast<size_t>(name_length), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, description.Description, -1,
+                              name.data(), name_length, nullptr, nullptr) <=
+        0) {
+      continue;
+    }
+    name.resize(static_cast<size_t>(name_length - 1));
+
+    adapters.push_back({
+        D3D11AdapterId(description.AdapterLuid),
+        std::move(name),
+        static_cast<int64_t>(description.DedicatedVideoMemory / (1024 * 1024)),
+    });
+  }
+
+  return adapters;
+}
+
+Microsoft::WRL::ComPtr<IDXGIAdapter1> Utils::FindD3D11Adapter(
+    const std::string& id) {
+  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+  if (FAILED(::CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  reinterpret_cast<void**>(
+                                      factory.GetAddressOf()))) ||
+      !factory) {
+    return {};
+  }
+
+  for (UINT index = 0;; ++index) {
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    const HRESULT hr = factory->EnumAdapters1(index, adapter.GetAddressOf());
+    if (hr == DXGI_ERROR_NOT_FOUND) {
+      break;
+    }
+    if (FAILED(hr)) {
+      return {};
+    }
+    if (!adapter) {
+      continue;
+    }
+
+    DXGI_ADAPTER_DESC1 description = {};
+    if (SUCCEEDED(adapter->GetDesc1(&description)) &&
+        (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 &&
+        D3D11AdapterId(description.AdapterLuid) == id) {
+      return adapter;
+    }
+  }
+
+  return {};
+}
 
 void Utils::EnterNativeFullscreen(HWND window) {
   if (fullscreen_) {

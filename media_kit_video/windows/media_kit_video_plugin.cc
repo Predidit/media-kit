@@ -10,6 +10,8 @@
 
 #include <Windows.h>
 
+#include <utility>
+
 namespace media_kit_video {
 
 MediaKitVideoPlugin* MediaKitVideoPlugin::instance_ = nullptr;
@@ -101,7 +103,20 @@ void MediaKitVideoPlugin::ProcessMainThreadTasks() {
 void MediaKitVideoPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  if (method_call.method_name().compare("VideoOutputManager.Create") == 0) {
+  if (method_call.method_name().compare("Utils.GetD3D11Adapters") == 0) {
+    flutter::EncodableList adapters;
+    for (const auto& adapter : Utils::GetD3D11Adapters()) {
+      adapters.emplace_back(flutter::EncodableMap{
+          {flutter::EncodableValue("id"), flutter::EncodableValue(adapter.id)},
+          {flutter::EncodableValue("name"),
+           flutter::EncodableValue(adapter.name)},
+          {flutter::EncodableValue("dedicatedVideoMemoryMb"),
+           flutter::EncodableValue(adapter.dedicated_video_memory_mb)},
+      });
+    }
+    result->Success(flutter::EncodableValue(std::move(adapters)));
+  } else if (method_call.method_name().compare("VideoOutputManager.Create") ==
+             0) {
     auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
     const auto library = arguments.find(flutter::EncodableValue("libmpv"));
     if (library == arguments.end() ||
@@ -124,6 +139,23 @@ void MediaKitVideoPlugin::HandleMethodCall(
         std::get<std::string>(configuration[flutter::EncodableValue("height")]);
     auto configuration_enable_hardware_acceleration = std::get<bool>(
         configuration[flutter::EncodableValue("enableHardwareAcceleration")]);
+    const auto adapter_id =
+        configuration.find(flutter::EncodableValue("windowsD3D11AdapterId"));
+    if (adapter_id != configuration.end() &&
+        !std::holds_alternative<std::monostate>(adapter_id->second)) {
+      if (!std::holds_alternative<std::string>(adapter_id->second)) {
+        result->Error("configuration",
+                      "windowsD3D11AdapterId must be a string or null.");
+        return;
+      }
+      const auto& id = std::get<std::string>(adapter_id->second);
+      if (id.empty()) {
+        result->Error("configuration",
+                      "windowsD3D11AdapterId must not be empty.");
+        return;
+      }
+      configuration_value.windows_d3d11_adapter_id = id;
+    }
     if (configuration_width.compare("null") != 0) {
       configuration_value.width =
           static_cast<int64_t>(std::stoll(configuration_width.c_str()));
@@ -171,6 +203,19 @@ void MediaKitVideoPlugin::HandleMethodCall(
                             },
                         }),
                     },
+                }),
+                nullptr);
+          });
+        },
+        [this, handle = handle_value](std::string message) {
+          RunOnMainThread([this, handle, message = std::move(message)]() {
+            channel_->InvokeMethod(
+                "VideoOutput.Error",
+                std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+                    {flutter::EncodableValue("handle"),
+                     flutter::EncodableValue(handle)},
+                    {flutter::EncodableValue("message"),
+                     flutter::EncodableValue(message)},
                 }),
                 nullptr);
           });

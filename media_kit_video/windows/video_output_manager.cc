@@ -15,12 +15,14 @@ VideoOutputManager::VideoOutputManager(
 void VideoOutputManager::Create(
     int64_t handle,
     VideoOutputConfiguration configuration,
-    std::function<void(int64_t, int64_t, int64_t)> texture_update_callback) {
+    std::function<void(int64_t, int64_t, int64_t)> texture_update_callback,
+    std::function<void(std::string)> error_callback) {
   std::thread([=]() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (video_outputs_.find(handle) == video_outputs_.end()) {
       auto instance = std::make_unique<VideoOutput>(
-          handle, configuration, registrar_, thread_pool_.get());
+          handle, configuration, registrar_, thread_pool_.get(),
+          error_callback);
       instance->SetTextureUpdateCallback(texture_update_callback);
       video_outputs_.insert(std::make_pair(handle, std::move(instance)));
     }
