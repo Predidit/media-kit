@@ -1,3 +1,6 @@
+## Unreleased
+- feat(windows): allow selecting a D3D11 render adapter while preserving the Flutter-adapter default
+
 ## 1.2.5
 - fix: subtitleView not being updated
 - fix: mobile double tap areas hidden but still mounted

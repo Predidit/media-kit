@@ -10,8 +10,18 @@
 #define UTILS_H_
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include <Windows.h>
+#include <dxgi1_2.h>
+#include <wrl.h>
+
+struct D3D11AdapterInfo {
+  std::string id;
+  std::string name;
+  int64_t dedicated_video_memory_mb = 0;
+};
 
 class Utils {
  public:
@@ -22,6 +32,13 @@ class Utils {
   static RTL_OSVERSIONINFOW GetWindowsVersion();
 
   static bool IsWindows10RTMOrGreater();
+
+  static std::vector<D3D11AdapterInfo> GetD3D11Adapters();
+
+  static Microsoft::WRL::ComPtr<IDXGIAdapter1> FindD3D11Adapter(
+      const std::string& id);
+
+  static std::string D3D11AdapterId(const LUID& luid);
 
  private:
   static constexpr auto kFlutterViewWindowClassName = L"FLUTTERVIEW";

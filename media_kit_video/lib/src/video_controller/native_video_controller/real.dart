@@ -14,6 +14,7 @@ import 'package:media_kit/media_kit.dart';
 
 import 'package:media_kit_video/src/utils/query_decoders.dart';
 import 'package:media_kit_video/src/video_controller/platform_video_controller.dart';
+import 'package:media_kit_video/src/windows_d3d11_adapter.dart';
 
 /// {@template native_video_controller}
 ///
@@ -28,6 +29,42 @@ import 'package:media_kit_video/src/video_controller/platform_video_controller.d
 ///
 /// {@endtemplate}
 class NativeVideoController extends PlatformVideoController {
+  /// Returns the current Windows hardware D3D11 adapters.
+  static Future<List<WindowsD3D11Adapter>>
+      getAvailableWindowsD3D11Adapters() async {
+    if (!Platform.isWindows) {
+      throw UnsupportedError(
+        'Windows D3D11 adapters are only available on Windows.',
+      );
+    }
+    final adapters = await _channel.invokeMethod<List<dynamic>>(
+      'Utils.GetD3D11Adapters',
+    );
+    if (adapters == null) {
+      throw StateError('The Windows plugin returned no D3D11 adapter list.');
+    }
+    return adapters.map((value) {
+      if (value is! Map<Object?, Object?>) {
+        throw FormatException('Invalid Windows D3D11 adapter response.');
+      }
+      final id = value['id'];
+      final name = value['name'];
+      final memory = value['dedicatedVideoMemoryMb'];
+      if (id is! String || name is! String || memory is! int) {
+        throw FormatException('Invalid Windows D3D11 adapter response.');
+      }
+      return WindowsD3D11Adapter(
+        id: id,
+        name: name,
+        dedicatedVideoMemoryMb: memory,
+      );
+    }).toList(growable: false);
+  }
+
+  /// Errors reported by the Windows native video renderer.
+  static Stream<WindowsVideoOutputError> get windowsVideoOutputErrors =>
+      _windowsVideoOutputErrors.stream;
+
   /// Whether [NativeVideoController] is supported on the current platform or not.
   static bool get supported =>
       Platform.isWindows ||
@@ -179,6 +216,8 @@ class NativeVideoController extends PlatformVideoController {
             'height': configuration.height.toString(),
             'enableHardwareAcceleration':
                 configuration.enableHardwareAcceleration,
+            if (Platform.isWindows)
+              'windowsD3D11AdapterId': configuration.windowsD3D11AdapterId,
           },
         },
       );
@@ -255,6 +294,9 @@ class NativeVideoController extends PlatformVideoController {
   /// This is used to notify about updated texture IDs & [Rect]s through [_channel].
   static final _controllers = HashMap<int, NativeVideoController>();
 
+  static final _windowsVideoOutputErrors =
+      StreamController<WindowsVideoOutputError>.broadcast();
+
   /// [MethodChannel] for invoking platform specific native implementation.
   static final _channel =
       const MethodChannel('com.alexmercerind/media_kit_video')
@@ -264,6 +306,18 @@ class NativeVideoController extends PlatformVideoController {
               debugPrint(call.method.toString());
               debugPrint(call.arguments.toString());
               switch (call.method) {
+                case 'VideoOutput.Error':
+                  {
+                    final int handle = call.arguments['handle'];
+                    final String message = call.arguments['message'];
+                    _windowsVideoOutputErrors.add(
+                      WindowsVideoOutputError(
+                        playerHandle: handle,
+                        message: message,
+                      ),
+                    );
+                    break;
+                  }
                 case 'VideoOutput.Resize':
                   {
                     // Notify about updated texture ID & [Rect].

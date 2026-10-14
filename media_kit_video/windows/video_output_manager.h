@@ -23,7 +23,8 @@ class VideoOutputManager {
   void Create(
       int64_t handle,
       VideoOutputConfiguration configuration,
-      std::function<void(int64_t, int64_t, int64_t)> texture_update_callback);
+      std::function<void(int64_t, int64_t, int64_t)> texture_update_callback,
+      std::function<void(std::string)> error_callback);
 
   void SetSize(int64_t handle,
                std::optional<int64_t> width,

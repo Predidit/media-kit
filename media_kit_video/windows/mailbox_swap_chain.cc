@@ -9,6 +9,7 @@
 #include "mailbox_swap_chain.h"
 
 #include <iostream>
+#include <limits>
 
 MailboxSwapChain::~MailboxSwapChain() {
   ReleaseSlots();
@@ -110,9 +111,19 @@ MailboxSwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) {
   return S_OK;
 }
 
-void MailboxSwapChain::ProducerCommit() {
+bool MailboxSwapChain::ProducerCommit(bool flush) {
   auto& ws = slots_[write_slot_];
-  context4_->Signal(ws.fence.Get(), ++ws.fence_value);
+  const auto signal_value = ws.fence_value + 1;
+  const HRESULT signal_result = context4_->Signal(ws.fence.Get(), signal_value);
+  if (FAILED(signal_result)) {
+    std::cout << "media_kit: MailboxSwapChain: Fence signal failed (hr=0x"
+              << std::hex << signal_result << std::dec << ")" << std::endl;
+    return false;
+  }
+  ws.fence_value = signal_value;
+  if (flush) {
+    context4_->Flush();
+  }
 
   // This runs one full render-cycle after the *previous* Signal was enqueued.
   // By then the D3D11 runtime has had ample opportunity to submit the prior
@@ -134,8 +145,9 @@ void MailboxSwapChain::ProducerCommit() {
       const int pend = static_cast<int>((snap >> 4) & 0x3u);
       const int comp = static_cast<int>((snap >> 2) & 0x3u);
       const int fr   = static_cast<int>( snap        & 0x3u);
-      if (slots_[pend].fence->GetCompletedValue() >=
-          slots_[pend].fence_value) {
+      const auto completed_value = slots_[pend].fence->GetCompletedValue();
+      if (completed_value != std::numeric_limits<uint64_t>::max() &&
+          completed_value >= slots_[pend].fence_value) {
         const uint32_t snap_desired =
             (static_cast<uint32_t>(comp) << 4) |
             (static_cast<uint32_t>(pend) << 2) |
@@ -179,6 +191,20 @@ void MailboxSwapChain::ProducerCommit() {
       break;
     }
   }
+  return true;
+}
+
+HRESULT MailboxSwapChain::UploadWriteFrame(const void* pixels,
+                                            UINT row_pitch) {
+  if (!pixels || row_pitch < static_cast<UINT>(width_) * 4) {
+    return E_INVALIDARG;
+  }
+  auto* texture = slots_[write_slot_].texture.Get();
+  if (!texture) {
+    return E_FAIL;
+  }
+  context4_->UpdateSubresource(texture, 0, nullptr, pixels, row_pitch, 0);
+  return device_->GetDeviceRemovedReason();
 }
 
 HANDLE MailboxSwapChain::ConsumerAcquire() {
