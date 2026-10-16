@@ -7,18 +7,26 @@ import 'package:path/path.dart' as p;
 
 import 'src/apple.dart';
 import 'src/bundles.dart';
+import 'src/ohos.dart';
 
 void main(List<String> arguments) async {
   await build(arguments, (input, output) async {
     if (!input.config.buildCodeAssets) return;
     final os = input.config.code.targetOS;
     final architecture = input.config.code.targetArchitecture;
+    final ohos = OhosBuildConfig.detect(
+      targetOS: os,
+      architecture: architecture,
+      compiler: input.config.code.cCompiler?.compiler,
+      sdkPath: input.userDefines.path('ohos-sdk')?.toFilePath(),
+      explicitlyOhos: input.userDefines['target'] == 'ohos',
+    );
     final catalogFile = File.fromUri(
       input.packageRoot.resolve('hook/native_bundles.json'),
     );
     final catalog = await Bundle.read(catalogFile);
     output.dependencies.add(catalogFile.uri);
-    final target = '${os.name}_${architecture.name}';
+    final target = '${ohos == null ? os.name : 'ohos'}_${architecture.name}';
     final bundle = catalog[target];
     if (bundle == null) {
       throw UnsupportedError('No media-kit native bundle for $target');
@@ -26,7 +34,7 @@ void main(List<String> arguments) async {
 
     final source = input.userDefines['source'] ?? 'bundled';
     if (source == 'system') {
-      if (os != OS.linux && os != OS.windows) {
+      if (ohos != null || (os != OS.linux && os != OS.windows)) {
         throw UnsupportedError(
           'System libmpv is supported on Linux and Windows only',
         );
@@ -77,6 +85,12 @@ void main(List<String> arguments) async {
                   input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator,
             )
           : await selectLibraries(directory, bundle.library);
+      if (ohos != null &&
+          !libraries.any(
+            (file) => p.basename(file.path) == 'libc++_shared.so',
+          )) {
+        libraries.add(ohos.sharedCxxRuntime);
+      }
       if (os == OS.android &&
           !libraries.any(
             (file) => p.basename(file.path) == 'libmediakitandroidhelper.so',
@@ -97,6 +111,10 @@ void main(List<String> arguments) async {
         );
         output.dependencies.add(library.uri);
       }
+    }
+    if (ohos != null) {
+      await ohos.buildBridge(input, output);
+      return;
     }
     await CBuilder.library(
       name: 'media_kit_event_loop',
