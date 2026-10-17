@@ -85,7 +85,7 @@
       "url": "https://github.com/ErBWs/libmpv-ohos-build/releases/download/20260811/libmpv_aarch64.zip",
       "sha256": "2bfb9844a7552c450694581b315b26cdf6202eaa57724e9f70f3facfad75163b",
       "format": "zip",
-      "library": "libmpv.so.2"
+      "library": "libmpv.so"
     }
   }
 }

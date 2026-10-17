@@ -28,12 +28,14 @@ void main() {
         'linux_x64',
         'ios_arm64',
         'macos_arm64',
+        'ohos_arm64',
       ]),
     );
     for (final bundle in catalog.values) {
       expect(bundle.url.scheme, 'https');
       expect(bundle.checksum, matches(r'^[a-f0-9]{64}$'));
     }
+    expect(catalog['ohos_arm64']!.library, 'libmpv.so');
   });
 
   test('rejects traversal, absolute and drive archive paths', () {
