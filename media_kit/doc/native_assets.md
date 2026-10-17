@@ -6,8 +6,9 @@ dependency and override. There are no replacement container packages.
 
 This branch requires Dart 3.10 or newer and Flutter 3.38 or newer. Both packages
 must come from the same checkout or migrated revision; previously published
-versions do not implement this protocol. Kazumi uses adjacent local checkouts
-until these changes are published.
+versions do not implement this protocol. Git consumers should pin both package
+paths (`media_kit` and `media_kit_video`) to the same immutable commit. Kazumi
+uses the OHOS adaptation in the `tignioj/media-kit` fork this way.
 
 ## Ownership
 
@@ -92,11 +93,35 @@ it. Apple requires Xcode (including `lipo`, `otool`, `install_name_tool`, `codes
 Windows 7z extraction uses the system `tar.exe`; other archives use ZIP or tar.
 All native targets require a C compiler for the small lifecycle bridge.
 
-An OHOS artifact is retained in the catalog, but **OHOS builds are not supported
-by the upstream `code_assets`/C toolchain used here**. An OHOS Flutter/Dart port
-must implement the hook target, compiler configuration and runtime asset mapping
-before this branch can ship on OHOS. Keeping the former binary-only package would
-not implement those requirements. The ArkTS video renderer remains in the tree.
+OHOS arm64 is supported with a Flutter-OH SDK that implements Native Assets
+(tested with 3.41.9+ohos-1.0.2, Dart 3.11.5). Flutter-OH currently reports a Linux
+target to hosted hooks, so the hook identifies its OHOS compiler SDK, selects
+`ohos_arm64`, and compiles the event-loop bridge with the OHOS target triple and
+sysroot. It does not use Linux binaries. The catalog's primary filename matches
+the archive and SONAME: `libmpv.so`.
+
+The OHOS ArkTS renderer still supplies the Flutter texture and native surface.
+The hook also bundles the SDK's shared C++ runtime required by libmpv (unless a
+local bundle supplies it). Use a native SDK compatible with the consuming
+application's minimum HarmonyOS API level.
+Only arm64 has a pinned OHOS bundle; other OHOS architectures fail explicitly.
+Emulators are not supported by the renderer; validate on a physical device.
+
+The compiler supplied by Flutter-OH normally locates the SDK automatically.
+If it is unavailable, configure the consuming application's OHOS builds only:
+
+```yaml
+hooks:
+  user_defines:
+    media_kit:
+      target: ohos
+      ohos-sdk: /absolute/path/to/openharmony/native
+```
+
+`OHOS_NDK_HOME` and `HOS_SDK_HOME` are also accepted for explicit OHOS targets.
+Setting these environment variables alone does not redirect normal Linux builds.
+The dependency ranges support Flutter-OH's pinned `meta 1.17` as well as newer
+hook/code-assets versions, without overriding Flutter SDK dependencies.
 
 Apple deployment minimums are also constrained by the selected Flutter SDK's
 native-asset framework generator. Flutter 3.47.5 emits iOS 15 / macOS 13 minimums;
@@ -134,3 +159,28 @@ unchanged. Linux and Apple release archives were downloaded and SHA-256 verified
 Apple framework metadata and architecture selections were inspected. Their
 application builds and runtime behavior still require Linux/macOS hosts. No APK
 was installed, overwritten or uninstalled on the connected Android device.
+
+
+OHOS validation (2026-10-17): the hook/core suite passed 19 tests on macOS;
+Kazumi passed 213 Flutter tests and built both smoke and normal Debug HAPs with
+Flutter-OH 3.41.9+ohos-1.0.2. The HAP contains the OHOS libmpv, C event-loop
+bridge, shared C++ runtime and their `ohos_arm64` Native Assets mappings.
+On a MatePad mini (HarmonyOS API 26), two runs each completed 12 render/dispose
+cycles across software/hardware decoding and synchronous/asynchronous player
+modes, plus 3 disposals during initialization. Hardware decoding reported
+`ohcodec`. Concurrent/repeated disposal completed, the native handle became
+null, and disposal took 69–136 ms across both runs. A device screenshot confirmed
+the test video was displayed through the Flutter texture. The normal-entry
+Kazumi HAP was then installed and launched successfully. OHOS emulators and other OHOS architectures were not validated.
+
+
+Release AOT follow-up (2026-10-17): after installing Rosetta for Flutter-OH's
+x86_64 macOS snapshot compiler, both Kazumi smoke and normal-entry Release HAPs
+built and passed CLI signing/verification. Both contain arm64 `libapp.so`, have
+`debug=false`, and omit `kernel_blob.bin`. On the same MatePad mini, two Release
+runs each passed 12 render/dispose cycles and 3 disposals during initialization
+(24 and 6 total). Software (`no`) and OHOS hardware (`ohcodec`) decoding worked
+in synchronous and asynchronous modes; concurrent/repeated disposal completed
+with a null native handle in 76–160 ms. A device screenshot confirmed actual
+hardware-decoded texture rendering. The normal-entry Release HAP was then
+installed in place of the smoke build.
