@@ -105,13 +105,9 @@ class MailboxSwapChain final : public IDXGISwapChain {
     return E_NOTIMPL;
   }
 
-  // Called from the producer thread after mpv_render_context_render returns.
-  // In addition to publishing write_slot_ as the new pending frame, it
-  // non-blockingly polls the *previous* pending frame's fence and, if the GPU
-  // has already completed it, promotes it to completed and updates
-  // latest_completed_slot_ (release store).  This is the sole site that
-  // advances latest_completed_slot_; ConsumerAcquire never touches the fence.
-  void ProducerCommit();
+  // Called from the producer thread after a frame write. |flush| submits the
+  // write and fence signal before publishing a cross-adapter frame.
+  bool ProducerCommit(bool flush = false);
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
   // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame.
@@ -122,6 +118,12 @@ class MailboxSwapChain final : public IDXGISwapChain {
   // Recreates all three texture slots at the new dimensions.
   // Must only be called from the producer thread with no active consumer.
   HRESULT Resize(int32_t width, int32_t height);
+
+  ID3D11Texture2D* GetWriteTexture() const {
+    return slots_[write_slot_].texture.Get();
+  }
+
+  HRESULT UploadWriteFrame(const void* pixels, UINT row_pitch);
 
   // Returns the latest GPU-confirmed HANDLE without advancing mailbox state.
   // Safe to call before the consumer thread starts.

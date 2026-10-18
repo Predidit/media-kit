@@ -10,6 +10,7 @@
 #include "../common/video_dimensions.h"
 
 #include <algorithm>
+#include <utility>
 
 // Limit the frame size to 1080p in software rendering.
 // This is for performance reasons & to avoid allocating too much memory.
@@ -21,13 +22,15 @@
 VideoOutput::VideoOutput(int64_t handle,
                          VideoOutputConfiguration configuration,
                          flutter::PluginRegistrarWindows* registrar,
-                         ThreadPool* thread_pool_ref)
+                         ThreadPool* thread_pool_ref,
+                         std::function<void(std::string)> error_callback)
     : handle_(reinterpret_cast<mpv_handle*>(handle)),
       width_(configuration.width),
       height_(configuration.height),
       configuration_(configuration),
       registrar_(registrar),
-      thread_pool_ref_(thread_pool_ref) {
+      thread_pool_ref_(thread_pool_ref),
+      error_callback_(std::move(error_callback)) {
   // The constructor must be invoked through the thread pool.
   auto future = thread_pool_ref_->Post([&]() {
     mpv_set_option_string(handle_, "video-sync", "audio");
@@ -45,7 +48,13 @@ VideoOutput::VideoOutput(int64_t handle,
         d3d11_renderer_ = std::make_unique<D3D11Renderer>(
             static_cast<int32_t>(width_.value_or(1)),
             static_cast<int32_t>(height_.value_or(1)),
-            flutter_adapter);
+            flutter_adapter,
+            configuration_.windows_d3d11_adapter_id.value_or(std::string{}));
+        if (d3d11_renderer_->adapter_selection_fallback()) {
+          ReportRendererError(
+              "The saved Windows D3D11 adapter could not be resolved for this "
+              "session; rendering on Auto.");
+        }
         
         // Initialize mpv with the D3D11 device and swap chain
         mpv_dxgi_init_params init_params = {
@@ -81,6 +90,11 @@ VideoOutput::VideoOutput(int64_t handle,
         } else {
           std::cout << "media_kit: VideoOutput: Failed to create mpv render context."
                     << std::endl;
+          if (HasExplicitWindowsAdapter()) {
+            ReportRendererError(
+                "mpv could not create a render context on the selected "
+                "Windows D3D11 adapter; software rendering is active.");
+          }
           d3d11_renderer_.reset(nullptr);
         }
       } catch (const std::exception& e) {
@@ -88,11 +102,22 @@ VideoOutput::VideoOutput(int64_t handle,
         std::cout << "media_kit: VideoOutput: Failed to initialize D3D11: " 
                   << e.what() << ", falling back to S/W."
                   << std::endl;
+        if (HasExplicitWindowsAdapter()) {
+          ReportRendererError(
+              "The selected Windows D3D11 adapter failed to initialize; "
+              "software rendering is active. Details: " +
+              std::string(e.what()));
+        }
         d3d11_renderer_.reset(nullptr);
       } catch (...) {
         // Fallback to software rendering.
         std::cout << "media_kit: VideoOutput: Failed to initialize D3D11, falling back to S/W."
                   << std::endl;
+        if (HasExplicitWindowsAdapter()) {
+          ReportRendererError(
+              "The selected Windows D3D11 adapter failed to initialize; "
+              "software rendering is active.");
+        }
         d3d11_renderer_.reset(nullptr);
       }
     }
@@ -165,12 +190,21 @@ void VideoOutput::NotifyRender() {
 }
 
 void VideoOutput::Render() {
+  if (renderer_transfer_failed_) {
+    return;
+  }
   if (texture_id_) {
     // H/W
     if (d3d11_renderer_ != nullptr) {
       mpv_render_context_render(render_context_, nullptr);
       mpv_render_context_report_swap(render_context_);
-      d3d11_renderer_->ProducerCommit();
+      if (!d3d11_renderer_->ProducerCommit()) {
+        renderer_transfer_failed_ = true;
+        ReportRendererError(
+            "D3D11 frame transfer to Flutter's graphics adapter failed. "
+            "Video output has stopped; reopen the video to retry.");
+        return;
+      }
     }
     // S/W
     if (pixel_buffer_ != nullptr) {
@@ -366,6 +400,17 @@ void VideoOutput::Resize(int64_t required_width, int64_t required_height) {
         std::make_pair(texture_id_, std::move(texture_variant)));
     // Notify public texture update callback.
     texture_update_callback_(texture_id_, required_width, required_height);
+  }
+}
+
+bool VideoOutput::HasExplicitWindowsAdapter() const {
+  return configuration_.windows_d3d11_adapter_id.has_value();
+}
+
+void VideoOutput::ReportRendererError(const std::string& message) {
+  std::cout << "media_kit: VideoOutput: " << message << std::endl;
+  if (error_callback_) {
+    error_callback_(message);
   }
 }
 

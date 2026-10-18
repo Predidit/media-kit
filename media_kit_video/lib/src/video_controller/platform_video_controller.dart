@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'package:media_kit_video/src/video_controller/video_controller.dart';
+import 'package:media_kit_video/src/windows_d3d11_adapter.dart';
 
 /// {@template platform_video_controller}
 ///
@@ -115,6 +116,19 @@ class VideoControllerConfiguration {
   /// Default: `true`
   final bool enableHardwareAcceleration;
 
+  /// Selects a Windows D3D11 render adapter by its opaque DXGI adapter ID.
+  /// Obtain IDs from [VideoController.getAvailableWindowsD3D11Adapters];
+  /// callers should not parse the ID. If a saved ID is no longer available,
+  /// rendering falls back to Auto and reports a [WindowsVideoOutputError].
+  ///
+  /// `null` keeps the existing behavior and renders on Flutter's graphics
+  /// adapter. On other platforms this option is ignored.
+  /// Selecting a different adapter requires a system-memory frame transfer
+  /// to Flutter's graphics adapter and may add latency.
+  ///
+  /// Default: `null`
+  final String? windowsD3D11AdapterId;
+
   /// Whether to use Flutter's `SurfaceProducer` API on Android.
   ///
   /// This option only has effect on Android. If disabled, the Android
@@ -139,6 +153,7 @@ class VideoControllerConfiguration {
     this.height,
     this.scale = 1.0,
     this.enableHardwareAcceleration = true,
+    this.windowsD3D11AdapterId,
     this.enableAndroidSurfaceProducer = true,
     this.androidAttachSurfaceAfterVideoParameters,
   });
@@ -151,6 +166,7 @@ class VideoControllerConfiguration {
     int? width,
     int? height,
     bool? enableHardwareAcceleration,
+    String? windowsD3D11AdapterId,
     bool? enableAndroidSurfaceProducer,
     bool? androidAttachSurfaceAfterVideoParameters,
   }) =>
@@ -162,6 +178,8 @@ class VideoControllerConfiguration {
         height: height ?? this.height,
         enableHardwareAcceleration:
             enableHardwareAcceleration ?? this.enableHardwareAcceleration,
+        windowsD3D11AdapterId:
+            windowsD3D11AdapterId ?? this.windowsD3D11AdapterId,
         enableAndroidSurfaceProducer:
             enableAndroidSurfaceProducer ?? this.enableAndroidSurfaceProducer,
         androidAttachSurfaceAfterVideoParameters:
