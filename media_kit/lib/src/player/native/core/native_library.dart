@@ -1,22 +1,15 @@
-/// This file is a part of media_kit (https://github.com/media-kit/media-kit).
-///
-/// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
-/// All rights reserved.
-/// Use of this source code is governed by MIT license that can be found in the LICENSE file.
+// This file is a part of media_kit (https://github.com/media-kit/media-kit).
+//
+// Copyright © 2021 & onwards, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
+// All rights reserved.
+// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 
 import 'dart:io';
 import 'dart:ffi';
 
-/// {@template native_library}
-///
-/// NativeLibrary
-/// -------------
-///
-/// Discovers & loads the libmpv shared library.
-///
-/// {@endtemplate}
-abstract class NativeLibrary {
-  /// The resolved libmpv dynamic library.
+import 'package:media_kit/ffi/ffi.dart';
+
+abstract final class NativeLibrary {
   static String get path {
     if (_resolved == null) {
       throw Exception(
@@ -26,17 +19,12 @@ abstract class NativeLibrary {
     return _resolved!;
   }
 
-  /// Initializes the |NativeLibrary| class for usage.
-  /// This method discovers & loads the libmpv shared library. It is generally present with the name `libmpv-2.dll` on Windows & `libmpv.so` on GNU/Linux.
-  /// The [libmpv] parameter can be used to manually specify the path to the libmpv shared library.
   static void ensureInitialized({String? libmpv}) {
-    // Attempt to load [libmpv] argument.
     if (libmpv != null) {
       DynamicLibrary.open(libmpv);
       _resolved = libmpv;
       return;
     }
-    // Attempt to load [LIBMPV_LIBRARY_PATH] environment variable.
     try {
       final env = Platform.environment['LIBMPV_LIBRARY_PATH'];
       if (env != null) {
@@ -45,67 +33,47 @@ abstract class NativeLibrary {
         return;
       }
     } catch (_) {}
-    // Attempt to load default names.
-    final names = {
-      'windows': [
-        'libmpv-2.dll',
-        'mpv-2.dll',
-        'mpv-1.dll',
-      ],
-      'linux': [
-        'libmpv.so.2',
-      ],
-      'macos': [
-        'Mpv.framework/Mpv',
-      ],
-      'ios': [
-        'Mpv.framework/Mpv',
-      ],
-      'android': [
-        'libmpv.so',
-      ],
-      'ohos': [
-        'libmpv.so',
-        'libmpv.so.2',
-      ],
-    }[Platform.operatingSystem];
-    if (names != null) {
-      // Try to load the dynamic library from the system using [DynamicLibrary.open].
-      for (final name in names) {
-        try {
-          DynamicLibrary.open(name);
-          _resolved = name;
-          return;
-        } catch (_) {}
-      }
-      // If the dynamic library is not loaded, throw an [Exception].
-      if (_resolved == null) {
-        throw Exception(
-          {
-            'windows':
-                'Cannot find libmpv-2.dll in your system %PATH%. One way to deal with this is to ship libmpv-2.dll with your compiled executable or script in the same directory.',
-            'linux':
-                'Cannot find libmpv at the usual places. Depending upon your distribution, you can install the libmpv package to make shared library available globally. On Debian or Ubuntu based systems, you can install it with: apt install libmpv-dev.',
-            'macos':
-                'Cannot find Mpv.framework/Mpv. Please ensure it\'s presence in the Frameworks folder of the application.',
-            'ios':
-                'Cannot find Mpv.framework/Mpv. Please ensure it\'s presence in the Frameworks folder of the application.',
-            'android':
-                'Cannot find libmpv.so. Please ensure it\'s presence in the APK.',
-            'ohos':
-                'Cannot find libmpv. Please ensure it\'s presence in the HAP.',
-          }[Platform.operatingSystem]!,
-        );
-      }
-    } else {
-      throw Exception(
-        'Unsupported operating system: ${Platform.operatingSystem}',
-      );
-    }
+    // Resolve the code asset after Flutter's platform-specific relocation.
+    _resolved = _bundledLibraryPath();
+    DynamicLibrary.open(_resolved!);
   }
 
-  /// The resolved libmpv dynamic library.
-  ///
-  /// **NOTE:** We are storing this value as [String] because we want to send/receive this across [Isolate]s.
   static String? _resolved;
+}
+
+@Native<UnsignedLong Function()>(
+  assetId: 'package:media_kit/libmpv',
+  symbol: 'mpv_client_api_version',
+)
+external int _clientApiVersion();
+
+@Native<Int32 Function(Pointer<Void>, Pointer<Char>, Int32)>(
+  assetId:
+      'package:media_kit/src/player/native/core/native_event_loop_bindings.dart',
+  symbol: 'media_kit_library_path',
+)
+external int _libraryPath(
+  Pointer<Void> symbol,
+  Pointer<Char> buffer,
+  int capacity,
+);
+
+String _bundledLibraryPath() {
+  const capacity = 131072;
+  final buffer = calloc<Char>(capacity);
+  try {
+    if (_libraryPath(
+          Native.addressOf<NativeFunction<UnsignedLong Function()>>(
+            _clientApiVersion,
+          ).cast(),
+          buffer,
+          capacity,
+        ) !=
+        0) {
+      throw StateError('Cannot resolve the bundled libmpv module');
+    }
+    return buffer.cast<Utf8>().toDartString();
+  } finally {
+    calloc.free(buffer);
+  }
 }

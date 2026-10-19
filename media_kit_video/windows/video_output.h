@@ -9,11 +9,11 @@
 #ifndef VIDEO_OUTPUT_H_
 #define VIDEO_OUTPUT_H_
 
+#include <atomic>
 #include <optional>
 
-#include <client.h>
-#include <render.h>
-#include <render_dxgi.h>
+#include "media_kit_mpv.h"
+#include "mpv/render_dxgi.h"
 
 #include <future>
 #include <memory>
@@ -98,10 +98,8 @@ class VideoOutput {
   int64_t texture_id_ = 0;
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   ThreadPool* thread_pool_ref_ = nullptr;
-  // For preventing any asynchronous operations (primarily texture objects
-  // deletion after unregister in |Resize|) access this object after
-  // destruction.
-  bool destroyed_ = false;
+  // Stop queued callbacks before draining and freeing their borrowed resources.
+  std::atomic<bool> destroyed_{false};
 
   std::mutex textures_mutex_ = std::mutex();
 

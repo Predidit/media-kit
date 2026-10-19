@@ -16,8 +16,9 @@
 
 ## 使用
 
-在 pubspec.yaml 中添加
-```
+需要 Dart 3.10 / Flutter 3.38 或更新版本。仅需核心包和可选的视频渲染包：
+
+```yaml
 dependencies:
   media_kit:
     git:
@@ -29,51 +30,10 @@ dependencies:
       url: https://github.com/Predidit/media-kit.git
       ref: main
       path: ./media_kit_video
-  media_kit_libs_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/universal/media_kit_libs_video
-
-dependency_overrides:
-  media_kit:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./media_kit
-  media_kit_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./media_kit_video
-  media_kit_libs_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/universal/media_kit_libs_video
-  media_kit_libs_linux:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/linux/media_kit_libs_linux
-  media_kit_libs_ios_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/ios/media_kit_libs_ios_video
-  media_kit_libs_android_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/android/media_kit_libs_android_video
-  media_kit_libs_windows_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/windows/media_kit_libs_windows_video
-  media_kit_libs_macos_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/macos/media_kit_libs_macos_video
 ```
+
+两个包应使用相同的 Git 分支或提交；发布应用时可将 `ref` 固定到具体提交。
+核心包的 Dart 构建钩子统一下载、校验、缓存和打包当前目标平台的 mpv、FFmpeg 及附属库。
+音频应用只需 `media_kit`，默认使用同一套音视频二进制。
+
+参见 [原生构建与迁移说明](media_kit/doc/native_assets.md) 和 [事件循环生命周期](media_kit/doc/native_event_loop.md)。

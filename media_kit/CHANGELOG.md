@@ -1,3 +1,15 @@
+## Unreleased
+
+* **Breaking:** Require Dart 3.10+ and a native C compiler. Native binaries are
+  supplied by the core build hook; remove all `media_kit_libs_*` dependencies.
+* Centralize pinned binary versions, caching and code-asset packaging. Move
+  Android JNI initialization into the core plugin, and bind video renderers to
+  their owning player's exact mpv module.
+* Replace Dart native callbacks with a native-owned event loop whose finalizer
+  remains safe after isolate/engine destruction. Await actual native teardown.
+* See [migration and platform requirements](doc/native_assets.md), including
+  the OHOS toolchain boundary and Apple deployment minimums.
+
 ## 1.1.11
 
 - feat: `Media` `start` & `end`
