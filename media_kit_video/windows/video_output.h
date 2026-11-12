@@ -13,7 +13,7 @@
 #include <optional>
 
 #include "media_kit_mpv.h"
-#include "mpv/render_dxgi.h"
+#include "mpv/render_d3d11.h"
 
 #include <future>
 #include <memory>

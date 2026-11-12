@@ -47,17 +47,13 @@ VideoOutput::VideoOutput(int64_t handle,
             static_cast<int32_t>(height_.value_or(1)),
             flutter_adapter);
         
-        // Initialize mpv with the D3D11 device and swap chain
-        mpv_dxgi_init_params init_params = {
-            d3d11_renderer_->device(),
-            // Must provide swap chain, not nullptr
-            // Otherwise, you will get freeze.
-            d3d11_renderer_->swap_chain()
-        };
-        
+        // Initialize mpv with the D3D11 device. The render target is supplied
+        // per frame through MPV_RENDER_PARAM_D3D11_FBO in Render().
+        mpv_d3d11_init_params init_params = {d3d11_renderer_->device()};
+
         mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_DXGI},
-            {MPV_RENDER_PARAM_DXGI_INIT_PARAMS, &init_params},
+            {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_D3D11},
+            {MPV_RENDER_PARAM_D3D11_INIT_PARAMS, &init_params},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
         
@@ -168,9 +164,18 @@ void VideoOutput::Render() {
   if (texture_id_) {
     // H/W
     if (d3d11_renderer_ != nullptr) {
-      mpv_render_context_render(render_context_, nullptr);
-      mpv_render_context_report_swap(render_context_);
-      d3d11_renderer_->ProducerCommit();
+      // mpv renders into the mailbox slot owned by the producer and flushes
+      // its work to the immediate context before returning.
+      mpv_d3d11_fbo fbo = {d3d11_renderer_->render_target()};
+      mpv_render_param params[]{
+          {MPV_RENDER_PARAM_D3D11_FBO, &fbo},
+          {MPV_RENDER_PARAM_INVALID, nullptr},
+      };
+      // Publish the slot only if mpv actually rendered into it.
+      if (mpv_render_context_render(render_context_, params) >= 0) {
+        mpv_render_context_report_swap(render_context_);
+        d3d11_renderer_->ProducerCommit();
+      }
     }
     // S/W
     if (pixel_buffer_ != nullptr) {

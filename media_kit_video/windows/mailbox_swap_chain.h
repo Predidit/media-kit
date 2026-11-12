@@ -17,9 +17,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
-// Minimal IDXGISwapChain facade backed by a lock-free 4-slot mailbox with
-// a last-completed-frame cache.
+// Lock-free 4-slot mailbox of render targets with a last-completed-frame
+// cache.  The producer hands ProducerTexture() to libmpv as the D3D11 render
+// target of each frame; the consumer reads the newest GPU-complete slot.
 //
 // Four BGRA8 textures are kept, each with a DXGI shared HANDLE.
 // mailbox_state_ is a single atomic<uint32_t>:
@@ -37,72 +39,21 @@
 //
 // Initial value 57u = 0b0_11_10_01:
 //   has_pending=0, extra_free=3, completed=2, free=1, write_slot_=0 (private)
-class MailboxSwapChain final : public IDXGISwapChain {
+class MailboxSwapChain final {
  public:
-  // Returns an AddRef'd pointer (ref count = 1). device must outlive this.
+  // device must outlive the returned mailbox.
   static HRESULT Create(ID3D11Device* device,
                         int32_t width,
                         int32_t height,
-                        MailboxSwapChain** out);
+                        std::unique_ptr<MailboxSwapChain>* out);
 
-  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
-                                           void** ppv) override;
-  ULONG STDMETHODCALLTYPE AddRef() override;
-  ULONG STDMETHODCALLTYPE Release() override;
+  ~MailboxSwapChain();
 
-  HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID, UINT,
-                                           const void*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID,
-                                                    const IUnknown*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID, UINT*, void*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetParent(REFIID, void**) override {
-    return E_NOTIMPL;
-  }
-
-  HRESULT STDMETHODCALLTYPE GetDevice(REFIID, void**) override {
-    return E_NOTIMPL;
-  }
-
-  // Present is a no-op: mpv drives presentation via done_frame / Flush.
-  HRESULT STDMETHODCALLTYPE Present(UINT, UINT) override { return S_OK; }
-
-  // Called by the libmpv DXGI back-end each frame to obtain a render target.
-  HRESULT STDMETHODCALLTYPE GetBuffer(UINT Buffer,
-                                      REFIID riid,
-                                      void** ppSurface) override;
-
-  HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) override;
-
-  HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL,
-                                               IDXGIOutput*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL*,
-                                               IDXGIOutput**) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT, UINT, UINT, DXGI_FORMAT,
-                                          UINT) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput**) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetFrameStatistics(
-      DXGI_FRAME_STATISTICS*) override {
-    return E_NOTIMPL;
-  }
-  HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT*) override {
-    return E_NOTIMPL;
+  // Render target of the frame being produced, passed to libmpv as
+  // mpv_d3d11_fbo::tex.  Borrowed pointer, valid until the next
+  // ProducerCommit() or Resize().  Producer thread only.
+  ID3D11Texture2D* ProducerTexture() const {
+    return slots_[write_slot_].texture.Get();
   }
 
   // Called from the producer thread after mpv_render_context_render returns.
@@ -119,7 +70,7 @@ class MailboxSwapChain final : public IDXGISwapChain {
   // no CAS, no fence poll, no flush, no stall, no KeyedMutex.
   HANDLE ConsumerAcquire();
 
-  // Recreates all three texture slots at the new dimensions.
+  // Recreates all texture slots at the new dimensions.
   // Must only be called from the producer thread with no active consumer.
   HRESULT Resize(int32_t width, int32_t height);
 
@@ -135,7 +86,6 @@ class MailboxSwapChain final : public IDXGISwapChain {
 
  private:
   MailboxSwapChain() = default;
-  ~MailboxSwapChain();
 
   MailboxSwapChain(const MailboxSwapChain&) = delete;
   MailboxSwapChain& operator=(const MailboxSwapChain&) = delete;
@@ -170,8 +120,6 @@ class MailboxSwapChain final : public IDXGISwapChain {
   std::atomic<int> latest_completed_slot_{2};
 
   int write_slot_ = 0;  // producer-private
-
-  std::atomic<ULONG> ref_count_{1u};
 };
 
 #endif  // MAILBOX_SWAP_CHAIN_H_

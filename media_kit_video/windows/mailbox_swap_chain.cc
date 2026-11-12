@@ -9,6 +9,7 @@
 #include "mailbox_swap_chain.h"
 
 #include <iostream>
+#include <new>
 
 MailboxSwapChain::~MailboxSwapChain() {
   ReleaseSlots();
@@ -17,10 +18,10 @@ MailboxSwapChain::~MailboxSwapChain() {
 HRESULT MailboxSwapChain::Create(ID3D11Device* device,
                                   int32_t width,
                                   int32_t height,
-                                  MailboxSwapChain** out) {
+                                  std::unique_ptr<MailboxSwapChain>* out) {
   if (!device || !out) return E_INVALIDARG;
 
-  auto* p = new (std::nothrow) MailboxSwapChain();
+  std::unique_ptr<MailboxSwapChain> p(new (std::nothrow) MailboxSwapChain());
   if (!p) return E_OUTOFMEMORY;
 
   p->device_ = device;
@@ -34,79 +35,16 @@ HRESULT MailboxSwapChain::Create(ID3D11Device* device,
     if (FAILED(hr2)) {
       std::cout << "media_kit: MailboxSwapChain: ID3D11DeviceContext4 not available "
                    "(hr=0x" << std::hex << hr2 << std::dec << ")" << std::endl;
-      delete p;
       return hr2;
     }
   }
 
   const HRESULT hr = p->AllocateSlots();
   if (FAILED(hr)) {
-    delete p;
     return hr;
   }
 
-  *out = p;
-  return S_OK;
-}
-
-HRESULT STDMETHODCALLTYPE MailboxSwapChain::QueryInterface(REFIID riid,
-                                                            void** ppv) {
-  if (!ppv) return E_POINTER;
-
-  if (riid == __uuidof(IUnknown) || riid == __uuidof(IDXGIObject) ||
-      riid == __uuidof(IDXGIDeviceSubObject) ||
-      riid == __uuidof(IDXGISwapChain)) {
-    *ppv = static_cast<IDXGISwapChain*>(this);
-    AddRef();
-    return S_OK;
-  }
-
-  *ppv = nullptr;
-  return E_NOINTERFACE;
-}
-
-ULONG STDMETHODCALLTYPE MailboxSwapChain::AddRef() {
-  return ref_count_.fetch_add(1u, std::memory_order_relaxed) + 1u;
-}
-
-ULONG STDMETHODCALLTYPE MailboxSwapChain::Release() {
-  const ULONG prev = ref_count_.fetch_sub(1u, std::memory_order_acq_rel);
-  if (prev == 1u) delete this;
-  return prev - 1u;
-}
-
-HRESULT STDMETHODCALLTYPE MailboxSwapChain::GetBuffer(UINT Buffer,
-                                                       REFIID riid,
-                                                       void** ppSurface) {
-  if (!ppSurface) return E_POINTER;
-  if (Buffer != 0) return DXGI_ERROR_INVALID_CALL;
-
-  if (riid != __uuidof(ID3D11Texture2D) &&
-      riid != __uuidof(ID3D11Resource)) {
-    return E_NOINTERFACE;
-  }
-
-  ID3D11Texture2D* tex = slots_[write_slot_].texture.Get();
-  if (!tex) return E_FAIL;
-
-  tex->AddRef();
-  *ppSurface = tex;
-  return S_OK;
-}
-
-HRESULT STDMETHODCALLTYPE
-MailboxSwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) {
-  if (!pDesc) return E_POINTER;
-  *pDesc = {};
-  pDesc->BufferDesc.Width = static_cast<UINT>(width_);
-  pDesc->BufferDesc.Height = static_cast<UINT>(height_);
-  pDesc->BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-  pDesc->BufferCount = 1;
-  pDesc->SampleDesc.Count = 1;
-  pDesc->BufferUsage =
-      DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
-  pDesc->Windowed = TRUE;
-  pDesc->SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+  *out = std::move(p);
   return S_OK;
 }
 

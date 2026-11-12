@@ -28,7 +28,7 @@ D3D11Renderer::D3D11Renderer(int32_t width, int32_t height,
 }
 
 D3D11Renderer::~D3D11Renderer() {
-  mailbox_swap_chain_.Reset();
+  mailbox_swap_chain_.reset();
   d3d_11_device_context_.Reset();
   d3d_11_device_.Reset();
   instance_count_--;
@@ -125,15 +125,13 @@ bool D3D11Renderer::CreateD3D11Device(IDXGIAdapter* flutter_adapter) {
 }
 
 bool D3D11Renderer::CreateMailbox() {
-  MailboxSwapChain* raw = nullptr;
-  const HRESULT hr =
-      MailboxSwapChain::Create(d3d_11_device_.Get(), width_, height_, &raw);
+  const HRESULT hr = MailboxSwapChain::Create(d3d_11_device_.Get(), width_,
+                                              height_, &mailbox_swap_chain_);
   if (FAILED(hr)) {
     std::cout << "media_kit: D3D11Renderer: MailboxSwapChain::Create failed "
                  "(hr=0x"
               << std::hex << hr << std::dec << ")" << std::endl;
     return false;
   }
-  mailbox_swap_chain_.Attach(raw);
   return true;
 }

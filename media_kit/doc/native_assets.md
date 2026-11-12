@@ -77,9 +77,10 @@ including `Mpv.xcframework`. Local inputs are registered as build dependencies.
 Linux/Windows applications may instead set `source: system`. This emits a system
 library reference and bundles only the event-loop bridge. The runtime loader must
 be able to find the primary library and all its dependencies. A system build must
-support the player/video API in use; Windows hardware rendering needs this fork's
-DXGI extension. Runtime `libmpv:` and `LIBMPV_LIBRARY_PATH` overrides remain
-available, but do not change what the build hook packages.
+support the player/video API in use; Windows hardware rendering needs libmpv's
+Direct3D 11 render backend (client API 2.6 or newer). Runtime `libmpv:` and
+`LIBMPV_LIBRARY_PATH` overrides remain available, but do not change what the
+build hook packages.
 
 Windows destruction acknowledges completion only after texture unregistration,
 queued render work and `mpv_render_context_free` finish. This keeps deterministic

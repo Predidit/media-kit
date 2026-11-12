@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <memory>
 
 #include "mailbox_swap_chain.h"
 #include "utils.h"
@@ -25,10 +26,10 @@
 // implements the lock-free triple-buffer mailbox between the libmpv rendering
 // thread (producer) and Flutter's render thread (consumer).
 //
-// The MailboxSwapChain is passed directly to mpv as the IDXGISwapChain* in
-// mpv_dxgi_init_params.  mpv calls GetBuffer(0, ...) to obtain a render
-// target and submits GPU work into it.  The plugin then calls
-// ProducerCommit(), which (a) signals a fence on the submitted work,
+// The device is handed to mpv through mpv_d3d11_init_params.  For every frame
+// the plugin passes render_target() to mpv_render_context_render() as
+// mpv_d3d11_fbo::tex and mpv submits its GPU work into it.  The plugin then
+// calls ProducerCommit(), which (a) signals a fence on the submitted work,
 // (b) non-blockingly checks the *previous* frame's fence and, if already
 // GPU-complete, promotes it to latest_completed_slot_, and (c) atomically
 // publishes write_slot_ as the new pending frame.  Flutter's
@@ -40,12 +41,16 @@ class D3D11Renderer {
   int32_t width() const { return width_; }
   int32_t height() const { return height_; }
 
-  // Raw device pointer used by VideoOutput to populate mpv_dxgi_init_params.
+  // Raw device pointer used by VideoOutput to populate mpv_d3d11_init_params.
   ID3D11Device* device() const { return d3d_11_device_.Get(); }
 
-  // IDXGISwapChain* facade backed by MailboxSwapChain.
-  // Passed to mpv as mpv_dxgi_init_params::swapchain (void*).
-  IDXGISwapChain* swap_chain() const { return mailbox_swap_chain_.Get(); }
+  // Mailbox slot the next frame must be rendered into, passed to mpv as
+  // mpv_d3d11_fbo::tex.  Borrowed pointer, valid until the next
+  // ProducerCommit() or SetSize().  Producer thread only.
+  ID3D11Texture2D* render_target() const {
+    return mailbox_swap_chain_ ? mailbox_swap_chain_->ProducerTexture()
+                               : nullptr;
+  }
 
   // |flutter_adapter| is the IDXGIAdapter* returned by
   // FlutterDesktopViewGetGraphicsAdapter.  When non-null the D3D11 device is
@@ -56,7 +61,7 @@ class D3D11Renderer {
                          IDXGIAdapter* flutter_adapter = nullptr);
   ~D3D11Renderer();
 
-  // Recreates the three mailbox slots at the new dimensions.
+  // Recreates the mailbox slots at the new dimensions.
   // Must be called from the producer thread only.
   void SetSize(int32_t width, int32_t height);
 
@@ -86,7 +91,7 @@ class D3D11Renderer {
   Microsoft::WRL::ComPtr<ID3D11Device> d3d_11_device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d_11_device_context_;
 
-  Microsoft::WRL::ComPtr<MailboxSwapChain> mailbox_swap_chain_;
+  std::unique_ptr<MailboxSwapChain> mailbox_swap_chain_;
 
   static int instance_count_;
 };
