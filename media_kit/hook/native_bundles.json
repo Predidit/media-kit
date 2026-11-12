@@ -30,14 +30,14 @@
       "library": "libmpv.so"
     },
     "windows_arm64": {
-      "url": "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/202609151348/mpv-dev-aarch64-20260915-git-0b7ed67.zip",
-      "sha256": "2adb3eb11a7985699203ee94b6182088e0e0bc8be492cd4adf184411dbf6a31d",
+      "url": "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/202611120335/mpv-dev-aarch64-20261112-git-bcde6b9.zip",
+      "sha256": "9e0733b8c31add5b489364d209729c50ee569827573ef2c1bb1c6f6caa783810",
       "format": "zip",
       "library": "libmpv-2.dll"
     },
     "windows_x64": {
-      "url": "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/202609151348/mpv-dev-x86_64-20260915-git-0b7ed67.7z",
-      "sha256": "8adceab30b6bcc5503fa9d3823b68f4acd15ee1c41d6dc2492826f373531c10a",
+      "url": "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/202611120335/mpv-dev-x86_64-20261112-git-bcde6b9.7z",
+      "sha256": "297de0494d7a8687ce42acda1e3a63b0ce86c099f09e0627020558c44aae323b",
       "format": "7z",
       "library": "libmpv-2.dll"
     },
