@@ -5,7 +5,7 @@ handle. It does not download, link or bundle a separate mpv binary. Windows/Linu
 CMake and Apple CocoaPods/SwiftPM compile the same source.
 
 The public headers in `include/mpv` are the unmodified upstream headers at mpv
-commit `bcde6b9` (client API 2.6), including the Direct3D 11 render backend in
+commit `09cf7a1` (client API 2.7), including the Direct3D 11 render backend in
 `render_d3d11.h` used by the Windows renderer. They retain their ISC license
 notices. Update them when the renderer uses a new API; downloaded import
 libraries are unnecessary.
