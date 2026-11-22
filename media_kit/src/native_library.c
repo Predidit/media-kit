@@ -12,6 +12,13 @@
 #define MK_EXPORT __attribute__((visibility("default"))) __attribute__((used))
 #endif
 
+MK_EXPORT void media_kit_prepare_libmpv(void) {
+#ifdef __linux__
+    // libmpv's client API requires a C numeric locale.
+    setlocale(LC_NUMERIC, "C");
+#endif
+}
+
 MK_EXPORT int32_t media_kit_library_path(void *symbol, char *buffer, int32_t capacity) {
 #ifdef _WIN32
     HMODULE module;
@@ -27,10 +34,6 @@ MK_EXPORT int32_t media_kit_library_path(void *symbol, char *buffer, int32_t cap
     size_t length = strlen(info.dli_fname) + 1;
     if (length > (size_t)capacity) return -1;
     memcpy(buffer, info.dli_fname, length);
-#ifdef __linux__
-    // libmpv's client API requires a C numeric locale.
-    setlocale(LC_NUMERIC, "C");
-#endif
     return 0;
 #endif
 }
