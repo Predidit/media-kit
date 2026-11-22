@@ -10,6 +10,12 @@ commit `09cf7a1` (client API 2.7), including the Direct3D 11 render backend in
 notices. Update them when the renderer uses a new API; downloaded import
 libraries are unnecessary.
 
+Since client API 2.7, libmpv draws with the gpu-next renderer when
+`MPV_RENDER_PARAM_RENDERER` is unset, and falls back to the gpu renderer when
+gpu-next cannot initialize on the given context. The renderers leave it unset;
+with OpenGL, gpu-next needs GLES 3.0 (or desktop GL with GLSL 1.30), so the
+Linux renderer creates a GLES 3 context when the display supports one.
+
 The owning Dart player supplies its resolved module path to
 `media_kit_mpv_initialize`. Initialization is serialized and publishes all symbols
 at once. Every renderer must initialize before calling the binding. A successful

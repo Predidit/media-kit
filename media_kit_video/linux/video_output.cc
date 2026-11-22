@@ -21,6 +21,7 @@ struct _VideoOutput {
   TextureGL* texture_gl;
   EGLDisplay egl_display; /* Same EGLDisplay the Flutter engine renders on. */
   EGLConfig egl_config;
+  EGLint egl_client_version; /* GLES major version of |egl_config|. */
   EGLContext egl_context; /* Isolated (non-shared) context for mpv. */
   guint8* pixel_buffer;
   TextureSW* texture_sw;
@@ -96,6 +97,7 @@ static void video_output_init(VideoOutput* self) {
   self->texture_gl = NULL;
   self->egl_display = EGL_NO_DISPLAY;
   self->egl_config = NULL;
+  self->egl_client_version = 0;
   self->egl_context = EGL_NO_CONTEXT;
   self->texture_sw = NULL;
   self->pixel_buffer = NULL;
@@ -110,6 +112,53 @@ static void video_output_init(VideoOutput* self) {
   self->gl_render_thread = NULL;
   self->destroyed = FALSE;
   g_mutex_init(&self->mutex);
+}
+
+// mpv renders into FBOs in a surfaceless context, so any RGBA8 config of the
+// requested client API works since it never backs an actual surface.
+static gboolean video_output_choose_egl_config(EGLDisplay egl_display,
+                                               EGLint renderable_type,
+                                               EGLConfig* config) {
+  const EGLint config_attribs[] = {
+      EGL_RENDERABLE_TYPE, renderable_type,
+      EGL_RED_SIZE, 8,
+      EGL_GREEN_SIZE, 8,
+      EGL_BLUE_SIZE, 8,
+      EGL_ALPHA_SIZE, 8,
+      EGL_NONE,
+  };
+  EGLint num_configs = 0;
+  return eglChooseConfig(egl_display, config_attribs, config, 1, &num_configs) &&
+         num_configs > 0;
+}
+
+// mpv's default gpu-next renderer (libplacebo) needs GLSL ES 3.00, i.e. a
+// GLES 3.0 context; on GLES 2.0 mpv falls back to its legacy gpu renderer.
+// Prefer a GLES 3 config, which requires EGL 1.5 or EGL_KHR_create_context.
+static gboolean video_output_choose_egl_config_for_mpv(EGLDisplay egl_display,
+                                                       EGLConfig* config,
+                                                       EGLint* client_version) {
+  if ((epoxy_egl_version(egl_display) >= 15 ||
+       epoxy_has_egl_extension(egl_display, "EGL_KHR_create_context")) &&
+      video_output_choose_egl_config(egl_display, EGL_OPENGL_ES3_BIT_KHR, config)) {
+    *client_version = 3;
+    return TRUE;
+  }
+  if (video_output_choose_egl_config(egl_display, EGL_OPENGL_ES2_BIT, config)) {
+    *client_version = 2;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static EGLContext video_output_create_egl_context(EGLDisplay egl_display,
+                                                  EGLConfig config,
+                                                  EGLint client_version) {
+  const EGLint context_attribs[] = {
+      EGL_CONTEXT_CLIENT_VERSION, client_version,
+      EGL_NONE,
+  };
+  return eglCreateContext(egl_display, config, EGL_NO_CONTEXT, context_attribs);
 }
 
 VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
@@ -156,22 +205,11 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
     // (legacy GLX embedders are unsupported); fall through to S/W rendering.
     if (egl_display != EGL_NO_DISPLAY &&
         eglQueryString(egl_display, EGL_VERSION) != NULL) {
-      // mpv renders into an FBO in a surfaceless context; any GLES2 config
-      // works since it never backs an actual surface.
-      const EGLint config_attribs[] = {
-          EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-          EGL_RED_SIZE, 8,
-          EGL_GREEN_SIZE, 8,
-          EGL_BLUE_SIZE, 8,
-          EGL_ALPHA_SIZE, 8,
-          EGL_NONE,
-      };
-      EGLint num_configs = 0;
-      if (eglChooseConfig(egl_display, config_attribs, &self->egl_config, 1, &num_configs) &&
-          num_configs > 0) {
+      if (video_output_choose_egl_config_for_mpv(egl_display, &self->egl_config,
+                                                 &self->egl_client_version)) {
         self->egl_display = egl_display;
-        g_print("media_kit: VideoOutput: Got engine EGL display (%p) with GLES2 config.\n",
-                egl_display);
+        g_print("media_kit: VideoOutput: Got engine EGL display (%p) with GLES%d config.\n",
+                egl_display, self->egl_client_version);
       } else {
         g_printerr("media_kit: VideoOutput: Failed to choose EGL config.\n");
         self->egl_config = NULL;
@@ -205,14 +243,26 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
         self->egl_config != NULL) {
       eglBindAPI(EGL_OPENGL_ES_API);
 
-      // Isolated (non-shared) GLES2 context; frames are shared with Flutter
+      // Isolated (non-shared) GLES context; frames are shared with Flutter
       // via EGLImage on the same display, not via context share lists.
-      const EGLint context_attribs[] = {
-          EGL_CONTEXT_CLIENT_VERSION, 2,
-          EGL_NONE
-      };
-      self->egl_context = eglCreateContext(self->egl_display, self->egl_config,
-                                           EGL_NO_CONTEXT, context_attribs);
+      self->egl_context = video_output_create_egl_context(
+          self->egl_display, self->egl_config, self->egl_client_version);
+      if (self->egl_context == EGL_NO_CONTEXT && self->egl_client_version > 2) {
+        g_printerr("media_kit: VideoOutput: Failed to create GLES3 context. Error: 0x%x\n",
+                   eglGetError());
+        EGLConfig gles2_config = NULL;
+        if (video_output_choose_egl_config(self->egl_display, EGL_OPENGL_ES2_BIT,
+                                           &gles2_config)) {
+          self->egl_config = gles2_config;
+          self->egl_client_version = 2;
+          self->egl_context = video_output_create_egl_context(
+              self->egl_display, self->egl_config, self->egl_client_version);
+        }
+      }
+      if (self->egl_context != EGL_NO_CONTEXT && self->egl_client_version < 3) {
+        g_printerr("media_kit: VideoOutput: GLES3 unavailable; mpv falls back from "
+                   "the gpu-next to the gpu renderer.\n");
+      }
 
       if (self->egl_context != EGL_NO_CONTEXT) {
         // Surfaceless: mpv only ever renders into FBOs.
@@ -224,6 +274,8 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
               NULL,
           };
 
+          // MPV_RENDER_PARAM_RENDERER is left unset on purpose: libmpv then
+          // uses gpu-next when it initializes on this context and gpu otherwise.
           mpv_render_param params[] = {
               {MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL},
               {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, (void*)&gl_init_params},
@@ -254,7 +306,8 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                 },
                 self);
             hardware_acceleration_supported = TRUE;
-            g_print("media_kit: VideoOutput: H/W rendering with isolated EGL context in dedicated thread.\n");
+            g_print("media_kit: VideoOutput: H/W rendering with isolated GLES%d context in dedicated thread.\n",
+                    self->egl_client_version);
           } else {
             g_printerr("media_kit: VideoOutput: Failed to create mpv_render_context.\n");
             eglDestroyContext(self->egl_display, self->egl_context);
