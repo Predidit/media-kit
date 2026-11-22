@@ -42,14 +42,14 @@
       "library": "libmpv-2.dll"
     },
     "linux_x64": {
-      "url": "https://github.com/Predidit/libmpv-linux-build/releases/download/20260810/libmpv_x86_64.zip",
-      "sha256": "45922100e5240bf69a72fa2ae140d5b54e1ed03993a8a3746dc798e3ae8ad6e4",
+      "url": "https://github.com/Predidit/libmpv-linux-build/releases/download/20261122/libmpv_x86_64.zip",
+      "sha256": "717d510a480baec2e939b6fc619d348a419e51e9b13b55643cff2e833bf367f3",
       "format": "zip",
       "library": "libmpv.so.2"
     },
     "linux_arm64": {
-      "url": "https://github.com/Predidit/libmpv-linux-build/releases/download/20260810/libmpv_aarch64.zip",
-      "sha256": "da0609556e2864dbe828102972edea96173a4be1ad1427a7493942dccb039b9f",
+      "url": "https://github.com/Predidit/libmpv-linux-build/releases/download/20261122/libmpv_aarch64.zip",
+      "sha256": "1a27b466ecef0224a6704fa00f1d097b9b7d1fcceb4498dbd40d31c71dcfacb6",
       "format": "zip",
       "library": "libmpv.so.2"
     },
