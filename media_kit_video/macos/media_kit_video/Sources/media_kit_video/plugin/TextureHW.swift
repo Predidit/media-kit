@@ -42,7 +42,7 @@ public class TextureHW: NSObject, FlutterTexture, ResizableTextureProtocol {
 
     super.init()
 
-    self.initMPV()
+    guard self.initMPV() else { return nil }
   }
 
   deinit {
@@ -71,7 +71,7 @@ public class TextureHW: NSObject, FlutterTexture, ResizableTextureProtocol {
     disposeMPV()
   }
 
-  private func initMPV() {
+  private func initMPV() -> Bool {
     CGLSetCurrentContext(context)
     defer {
       OpenGLHelpers.checkError("initMPV")
@@ -103,9 +103,11 @@ public class TextureHW: NSObject, FlutterTexture, ResizableTextureProtocol {
       ]
     }
 
-    MPVHelpers.checkError(
-      media_kit_mpv_render_context_create(&renderContext, handle, &params)
-    )
+    let status = media_kit_mpv_render_context_create(&renderContext, handle, &params)
+    guard status >= 0, renderContext != nil else {
+      NSLog("TextureHW: render context initialization failed (%d)", status)
+      return false
+    }
 
     media_kit_mpv_render_context_set_update_callback(
       renderContext,
@@ -117,6 +119,7 @@ public class TextureHW: NSObject, FlutterTexture, ResizableTextureProtocol {
       },
       UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
     )
+    return true
   }
 
   private func disposeMPV() {
