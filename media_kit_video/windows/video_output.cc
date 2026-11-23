@@ -51,6 +51,9 @@ VideoOutput::VideoOutput(int64_t handle,
         // per frame through MPV_RENDER_PARAM_D3D11_FBO in Render().
         mpv_d3d11_init_params init_params = {d3d11_renderer_->device()};
 
+        // MPV_RENDER_PARAM_RENDERER is left unset on purpose: libmpv then
+        // renders with gpu-next (libplacebo's D3D11 backend on this device)
+        // and falls back to the gpu renderer when gpu-next cannot initialize.
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_D3D11},
             {MPV_RENDER_PARAM_D3D11_INIT_PARAMS, &init_params},

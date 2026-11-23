@@ -14,7 +14,10 @@ Since client API 2.7, libmpv draws with the gpu-next renderer when
 `MPV_RENDER_PARAM_RENDERER` is unset, and falls back to the gpu renderer when
 gpu-next cannot initialize on the given context. The renderers leave it unset;
 with OpenGL, gpu-next needs GLES 3.0 (or desktop GL with GLSL 1.30), so the
-Linux renderer creates a GLES 3 context when the display supports one.
+Linux renderer creates a GLES 3 context when the display supports one. With
+Direct3D 11, gpu-next runs libplacebo's D3D11 backend on the device the Windows
+renderer creates on Flutter's adapter and draws straight into its shared mailbox
+textures; this needs a libmpv built against libplacebo with D3D11 support.
 
 The owning Dart player supplies its resolved module path to
 `media_kit_mpv_initialize`. Initialization is serialized and publishes all symbols

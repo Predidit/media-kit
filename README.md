@@ -6,7 +6,7 @@
 
 2. Linux 平台捆绑预构建 libmpv2.so 以摆脱对系统 mpv 的依赖。
 
-3. windows 平台原生支持 D3D11 渲染器，支持零拷贝硬件加速渲染，并摆脱对 ANGLE 的依赖。
+3. windows 平台原生支持 D3D11 渲染器，默认通过 mpv 的 gpu-next (libplacebo) 渲染，支持零拷贝硬件加速渲染，并摆脱对 ANGLE 的依赖。
 
 4. Linux 平台使用模拟 vulkan 交换链的三重缓冲实现以尽量避免 Linux 平台糟糕的 openGL 驱动导致的黑屏或闪烁行为。
 
