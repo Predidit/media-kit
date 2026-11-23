@@ -15,4 +15,10 @@ class NativePlayer extends PlatformPlayer {
   /// Whether the [NativePlayer] is initialized for unit-testing.
   @visibleForTesting
   static bool test = false;
+
+  Future<void> setProperty(
+    String property,
+    String value, {
+    bool waitForInitialization = true,
+  }) async {}
 }
