@@ -11,7 +11,6 @@
 
 #include <Windows.h>
 #include <d3d11.h>
-#include <d3d11_4.h>
 #include <dxgi.h>
 #include <wrl.h>
 
@@ -19,29 +18,27 @@
 #include <cstdint>
 #include <memory>
 
-// Lock-free 4-slot mailbox of render targets with a last-completed-frame
-// cache.  The producer hands ProducerTexture() to libmpv as the D3D11 render
-// target of each frame; the consumer reads the newest GPU-complete slot.
+// Double-buffered D3D11 render targets backed by a single persistent DXGI
+// shared presentation texture.
 //
-// Four BGRA8 textures are kept, each with a DXGI shared HANDLE.
-// mailbox_state_ is a single atomic<uint32_t>:
-//   bits [1:0] = free_slot         (0-3): producer takes this for the next frame
-//   bits [3:2] = completed_slot    (0-3): most recent fence-confirmed frame;
-//                                          safe Consumer fallback at any time
-//   bits [5:4] = pending_or_extra  (0-3): has_pending=1 → latest submitted frame
-//                                          (fence may still be in-flight);
-//                                          has_pending=0 → second free slot
-//   bit  [6]   = has_pending            : 1 = a new frame is waiting to be consumed
+// Why a single persistent shared HANDLE is required for Flutter on Windows:
+// Flutter's Windows ExternalTextureD3d caches the ANGLE EGLSurface by comparing
+// the incoming descriptor handle against |last_surface_handle_|. If a plugin
+// rotates multiple DXGI shared handles across frames, |handle !=
+// last_surface_handle_| fires on every single video frame, forcing Flutter to
+// tear down and recreate the EGLSurface (OpenSharedResource + eglBindTexImage)
+// 24-60 times per second. On Intel Iris Xe drivers this causes severe 3D GPU
+// overhead and runaway shared GPU memory growth that persists until process
+// exit.
 //
-// 4-slot invariant (all roles are always distinct):
-//   has_pending=1: write_slot_(private) | free | pending | completed  = 4 slots
-//   has_pending=0: write_slot_(private) | free | extra_free | completed = 4 slots
-//
-// Initial value 57u = 0b0_11_10_01:
-//   has_pending=0, extra_free=3, completed=2, free=1, write_slot_=0 (private)
+// Instead, libmpv renders into two private (non-shared) render targets in
+// round-robin order, and ProducerCommit() issues an intra-device GPU-to-GPU
+// CopyResource() into |present_texture_| followed by Flush(). ConsumerAcquire()
+// always returns the same stable |present_shared_handle_| for a given texture
+// size, so Flutter binds the shared surface once per Resize().
 class MailboxSwapChain final {
  public:
-  // device must outlive the returned mailbox.
+  // device must outlive the returned swap chain.
   static HRESULT Create(ID3D11Device* device,
                         int32_t width,
                         int32_t height,
@@ -50,35 +47,31 @@ class MailboxSwapChain final {
   ~MailboxSwapChain();
 
   // Render target of the frame being produced, passed to libmpv as
-  // mpv_d3d11_fbo::tex.  Borrowed pointer, valid until the next
-  // ProducerCommit() or Resize().  Producer thread only.
+  // mpv_d3d11_fbo::tex. Borrowed pointer, valid until the next
+  // ProducerCommit() or Resize(). Producer thread only.
   ID3D11Texture2D* ProducerTexture() const {
-    return slots_[write_slot_].texture.Get();
+    return render_slots_[write_slot_].Get();
   }
 
   // Called from the producer thread after mpv_render_context_render returns.
-  // In addition to publishing write_slot_ as the new pending frame, it
-  // non-blockingly polls the *previous* pending frame's fence and, if the GPU
-  // has already completed it, promotes it to completed and updates
-  // latest_completed_slot_ (release store).  This is the sole site that
-  // advances latest_completed_slot_; ConsumerAcquire never touches the fence.
+  // Copies the freshly rendered frame into the persistent shared presentation
+  // texture, flushes the immediate context so the write is visible to Flutter's
+  // D3D11 device, and advances write_slot_ for the next frame.
   void ProducerCommit();
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
-  // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame.
-  // Implementation is a single acquire load of latest_completed_slot_ —
-  // no CAS, no fence poll, no flush, no stall, no KeyedMutex.
+  // Returns the persistent DXGI shared HANDLE of |present_texture_| via a
+  // single atomic acquire load.
   HANDLE ConsumerAcquire();
 
-  // Recreates all texture slots at the new dimensions.
+  // Recreates all textures at the new dimensions.
   // Must only be called from the producer thread with no active consumer.
   HRESULT Resize(int32_t width, int32_t height);
 
-  // Returns the latest GPU-confirmed HANDLE without advancing mailbox state.
+  // Returns the persistent shared HANDLE without mutating state.
   // Safe to call before the consumer thread starts.
   HANDLE ReadHandleSnapshot() const {
-    return slots_[latest_completed_slot_.load(std::memory_order_acquire)]
-        .shared_handle;
+    return present_shared_handle_.load(std::memory_order_acquire);
   }
 
   int32_t width() const { return width_; }
@@ -93,31 +86,20 @@ class MailboxSwapChain final {
   HRESULT AllocateSlots();
   void ReleaseSlots();
 
-  struct TextureSlot {
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-    HANDLE shared_handle = nullptr;
-    Microsoft::WRL::ComPtr<ID3D11Fence> fence;
-    uint64_t fence_value = 0;
-  };
-
   ID3D11Device* device_ = nullptr;
-  Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4_;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
 
   int32_t width_ = 1;
   int32_t height_ = 1;
 
-  TextureSlot slots_[4];
+  // Private non-shared render targets alternated by libmpv so the next frame
+  // can start rendering without waiting on the previous CopyResource().
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> render_slots_[2];
 
-  // Lock-free mailbox state — see bit-field comment at top of class.
-  // Initial value 57u = 0b0_11_10_01.
-  std::atomic<uint32_t> mailbox_state_{57u};
-
-  // Cache of the most recently fence-confirmed completed slot.
-  // ConsumerAcquire reads this directly (one atomic load, no CAS, no fence
-  // poll).  Updated by ProducerCommit after a successful non-blocking
-  // pending→completed promotion.  Initialised to 2, which matches the
-  // 'completed' field in mailbox_state_'s initial value 57u.
-  std::atomic<int> latest_completed_slot_{2};
+  // Single persistent DXGI shared texture exported to Flutter for the lifetime
+  // of the current (width_, height_).
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> present_texture_;
+  std::atomic<HANDLE> present_shared_handle_{nullptr};
 
   int write_slot_ = 0;  // producer-private
 };
