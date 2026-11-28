@@ -23,19 +23,18 @@
 #include "utils.h"
 
 // D3D11Renderer creates a D3D11 device and owns a MailboxSwapChain that
-// implements the lock-free triple-buffer mailbox between the libmpv rendering
-// thread (producer) and Flutter's render thread (consumer).
+// bridges the libmpv rendering thread (producer) and Flutter's render thread
+// (consumer) via a single persistent DXGI shared presentation texture.
 //
-// The device is handed to mpv through mpv_d3d11_init_params.  For every frame
+// The device is handed to mpv through mpv_d3d11_init_params. For every frame
 // the plugin passes render_target() to mpv_render_context_render() as
-// mpv_d3d11_fbo::tex and mpv submits its GPU work into it.  The plugin then
-// calls ProducerCommit(), which (a) signals a fence on the submitted work,
-// (b) non-blockingly checks the *previous* frame's fence and, if already
-// GPU-complete, promotes it to latest_completed_slot_, and (c) atomically
-// publishes write_slot_ as the new pending frame.  Flutter's
-// GpuSurfaceTexture callback calls ConsumerAcquire() — a single acquire
-// load of latest_completed_slot_ — to receive the DXGI shared HANDLE of
-// the newest confirmed frame, with no copy, no flush, and no OS lock.
+// mpv_d3d11_fbo::tex and mpv submits its GPU work into a private render target.
+// The plugin then calls ProducerCommit(), which copies that render target into
+// the persistent shared presentation texture, flushes the immediate context,
+// and alternates to the other private render target. Flutter's
+// GpuSurfaceTexture callback calls ConsumerAcquire() to obtain the constant
+// DXGI shared HANDLE so ExternalTextureD3d reuses its cached EGLSurface instead
+// of recreating it on every frame.
 class D3D11Renderer {
  public:
   int32_t width() const { return width_; }
@@ -66,14 +65,12 @@ class D3D11Renderer {
   void SetSize(int32_t width, int32_t height);
 
   // Called from the producer thread (mpv thread pool) after
-  // mpv_render_context_render returns.  Signals the frame fence, then
-  // non-blockingly attempts to promote the previous pending frame to
-  // latest_completed_slot_, and finally publishes the new pending frame.
+  // mpv_render_context_render returns. Copies the rendered frame into the
+  // persistent shared presentation texture and flushes the immediate context.
   void ProducerCommit();
 
   // Called from the consumer thread (Flutter GpuSurfaceTexture callback).
-  // Returns the DXGI shared HANDLE of the most recent fence-confirmed frame
-  // via a single atomic load — no fence poll, no flush, no stall.
+  // Returns the persistent DXGI shared HANDLE for the current dimensions.
   HANDLE ConsumerAcquire();
 
   // Returns the DXGI shared HANDLE for the current read slot without
